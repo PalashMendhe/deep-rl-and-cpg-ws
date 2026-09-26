@@ -5,12 +5,152 @@ an obstacle-aware Gymnasium environment, a three-stage curriculum
 (**flat → rough → hurdle jump**), and hybrid controllers that pair a Central
 Pattern Generator (CPG) with a PPO residual policy.
 
+<p align="center">
+  <img src="gifs/go1_walking.gif" alt="Unitree Go1 Locomotion" width="700"/>
+</p>
+
 Two runnable training stacks are kept side by side:
 
 | Stack | Entry point | Role | Checkpoints |
 | :--- | :--- | :--- | :--- |
 | Custom PPO | `base_ppo.py` | **Primary** — CPG stages + obstacle curriculum, hand-written actor/critic/loss | `ppo_checkpoint_*.pth` (repo root) |
 | Stable-Baselines3 PPO | `src/train.py` | Secondary baseline — CPG `off`, `VecNormalize` | `src/checkpoints/your_run_name/` |
+
+## System architecture
+
+```mermaid
+flowchart TB
+    subgraph ASSETS["MuJoCo assets - vendored menagerie"]
+        GO1["go1.xml - 12 actuators + 4 foot touch sensors"]
+        FLAT["scene.xml - flat world"]
+        OBST["scene_obstacles.xml - 3 bumps + hurdle box"]
+    end
+
+    subgraph TERR["Terrain and curriculum"]
+        TC["TerrainConfig - flat / rough / hurdle / mixed"]
+        CURR["stage_for_step - stage 0 flat, 1 rough, 2 hurdle"]
+    end
+
+    subgraph ENV["go1_env - Gymnasium MujocoEnv, frame_skip 5, dt 0.01 s"]
+        RESET["reset_model - home pose + noise, per-episode geoms"]
+        CPGSEL["_cpg_targets - CPG targets + residual blend"]
+        SIM["do_simulation - 12 joint position targets"]
+        OBS["_get_obs - 56-dim: 52 proprio + 4 obstacle extras"]
+        PRIV["_get_privileged_obs - 9-dim critic extras"]
+        REW["reward + info - velocity, navigation, kinematic, jump, landing"]
+    end
+
+    subgraph CPG["src/cpg - central pattern generators"]
+        FT["FixedTrotCPG - open-loop trot + tall stance"]
+        PAR["ParametricCPG - 6-dim mod of freq / amp / duty / jump_boost"]
+        HOPF["HopfCPGNetwork - 4 coupled oscillators + contact feedback"]
+    end
+
+    subgraph TRAIN["Training"]
+        BASE["base_ppo.py - ActorNetwork 56-256-256 + residual/mod heads, CriticNetwork, RolloutBuffer, PPOAgent"]
+        SB3["src/train.py - SB3 PPO + VecNormalize, 4 envs"]
+        CK["ppo_checkpoint_latest.pth / ppo_checkpoint_step.pth"]
+        CK2["src/checkpoints + src/logs (TensorBoard)"]
+    end
+
+    subgraph EVAL["Evaluation and recording"]
+        CR["customs_eval_render.py - custom checkpoints"]
+        ER["src/eval_render.py - SB3 checkpoints"]
+        GIF["gifs/*.gif - 480x480 frames at 30 fps"]
+    end
+
+    TESTS["tests/test_cpg.py 6 tests + tests/test_obstacle_env.py 9 tests"]
+
+    GO1 --> ENV
+    FLAT --> ENV
+    OBST --> ENV
+    CURR --> TC
+    TC --> RESET
+    RESET --> SIM
+    CPGSEL --> SIM
+    SIM --> OBS
+    SIM --> REW
+    SIM --> CPGSEL
+    OBS --> PRIV
+    CPGSEL --> FT
+    CPGSEL --> PAR
+    CPGSEL --> HOPF
+    FT --> CPGSEL
+    PAR --> CPGSEL
+    HOPF --> CPGSEL
+    OBS --> BASE
+    OBS --> SB3
+    BASE -->|"action: 12 residual + 6 mod"| CPGSEL
+    SB3 -->|"action: 12"| CPGSEL
+    BASE --> CK
+    SB3 --> CK2
+    CK --> CR
+    CK2 --> ER
+    CR --> GIF
+    ER --> GIF
+    TESTS -.-> ENV
+    TESTS -.-> CPG
+```
+
+<details>
+<summary>Plain-text version of the diagram (for viewers without Mermaid support)</summary>
+
+```text
+        mujoco_menagerie/unitree_go1                    src/cpg  (mode select)
+ ┌────────────────────────────────────────┐      ┌───────────────────────────────────────┐
+ │ go1.xml    12 actuators, 4 touch feet  │      │ FixedTrotCPG    open-loop trot        │
+ │ scene.xml  flat world                  │      │ ParametricCPG   6-dim mod             │
+ │ scene_obstacles.xml  bumps + hurdle    │      │ HopfCPGNetwork  4 oscillators + fb    │
+ └────────────────┬───────────────────────┘      └────────────────┬──────────────────────┘
+                  │ xml_file / terrain_config                     │ 12 joint targets
+                  v                                               v
+ ┌───────────────────────────────────────────────────────────────────────────────────────┐
+ │ src/go1_env.py  go1_env(Gymnasium MujocoEnv, frame_skip=5, dt=0.01 s)                 │
+ │   reset_model(): home pose + noise, _reposition_hurdle() / _reposition_bumps()        │
+ │   step(): _cpg_targets(action) -> do_simulation() -> reward + info                    │
+ │   _get_obs(): 56-dim (52 proprio + 4 hurdle)    _get_privileged_obs(): 9-dim extras    │
+ └────────────┬────────────────────────────────────────────────────┬─────────────────────┘
+              │ obs 56                                             │ obs 56
+              v                                                    v
+ ┌──────────────────────────────┐                  ┌──────────────────────────────────────┐
+ │ base_ppo.py  (primary)       │                  │ src/train.py  (SB3 baseline)         │
+ │  ActorNetwork 56->256->256   │                  │  PPO(MlpPolicy) + VecNormalize x4    │
+ │  + residual(12) | mod(6)     │                  │  curriculum via GO1_STAGE            │
+ │  CriticNetwork, RolloutBuffer│                  │  CheckpointCallback every 15k calls  │
+ │  curriculum + form_weight    │                  └────────────────┬─────────────────────┘
+ └──────────────┬───────────────┘                                   │
+                │ ppo_checkpoint_*.pth                              │ src/checkpoints, src/logs
+                v                                                   v
+ ┌──────────────────────────────┐                  ┌──────────────────────────────────────┐
+ │ customs_eval_render.py       │                  │ src/eval_render.py                   │
+ │  + cv2 CPG overlay           │                  │  VecNormalize eval_mode              │
+ └──────────────┬───────────────┘                  └────────────────┬─────────────────────┘
+                └──────────►  gifs/*.gif  (imageio, 30 fps)  ◄───────┘
+                        ▲
+                        │ asserts obs 56, action 12/18, hurdle + bump randomization
+              tests/test_cpg.py (6)  +  tests/test_obstacle_env.py (9)
+```
+
+</details>
+
+Reading the diagram from the outside in:
+
+1. **Assets** — the vendored Go1 model carries the actuators and the four `*_Touch`
+   foot sensors used by the reward and the Hopf feedback; the two scenes are never
+   mutated on disk.
+2. **Terrain** — `TerrainConfig` plus `stage_for_step()` decide which world is loaded
+   and re-seed hurdle/bump poses on every reset.
+3. **Env** — `go1_env` turns a 12- or 18-dim action into 12 joint targets (CPG base +
+   residual), simulates, and emits the 56-dim observation, the 9-dim privileged critic
+   vector, the reward and the full `info` breakdown.
+4. **CPG** — the selected generator supplies the base gait; the policy only supplies
+   residuals, and in `parametric`/`hopf` also the 6 modulation values.
+5. **Training** — two independent loops write their own checkpoints: custom PPO at the
+   repo root, SB3 under `src/`.
+6. **Evaluation** — each renderer loads its own checkpoints and records rollouts into
+   `gifs/` (see [Video & GIF capture](#video--gif-capture)).
+7. **Tests** — offline gates assert the obs/action contract, obstacle randomization and
+   CPG kinematics without needing a trained policy.
 
 ## Status (verified in this working tree)
 
@@ -276,7 +416,8 @@ Both renderers run the env with `render_mode="human"`, so they need a display
 (`DISPLAY` is set in this workspace; MuJoCo opens its own window). Note that in
 `human` mode Gymnasium's MuJoCo `render()` returns `None`, so *no frames are
 captured* and no GIF is written — switch the env to `render_mode="rgb_array"`
-if you actually want the GIF.
+if you actually want the GIF (see [Video & GIF capture](#video--gif-capture)
+for verified recipes).
 
 ```bash
 # SB3 policy (expects rl_model_120000_steps.zip + latest_vecnormalize.pkl)
@@ -310,6 +451,98 @@ warm-start too), reads the checkpoint's own `cpg_mode`, renders up to 2000 steps
 A verified run prints e.g. `Episodes: 1 | jump_eps: 1 hit_rate=0.00
 success_rate=0.00 mean_clearance=0.184m mean_landing_bonus=0.000` followed by
 `No frames were captured; GIF was not saved.` (the `human`-mode caveat above).
+
+## Video & GIF capture
+
+No media is committed to this repo: `gifs/` is empty and `.gitignore` excludes
+`gifs/`, `*.gif`, `*.mp4` and `*.avi` (confirmed with `git check-ignore`), so
+recordings stay local by design. To commit one anyway, force-add it:
+`git add -f gifs/go1_hurdle_fixed_residual.gif`.
+
+### Capture rules (all verified in this workspace)
+
+| Fact | Detail |
+| :--- | :--- |
+| Frame format | `480x480x3` `uint8` per control step (`dt = 0.01 s`, so 1 s of rollout = 100 frames) |
+| `render_mode="rgb_array"` | `render()` returns the array — required for any GIF/MP4 capture |
+| `render_mode="human"` | `render()` returns `None` (window only), so there is nothing to write |
+| Through `gym.make(...)` | the **first** `render()` raises `AssertionError: With no render_modes, expects the Env.render_mode to be None` because `go1_env` declares an empty `metadata["render_modes"]`; later calls pass through. `customs_eval_render.py` swallows that first assertion in its `try/except`, which is why it reports `No frames were captured` |
+| Working capture path | construct the env **directly** (`go1_env(..., render_mode="rgb_array")`) or use `env.unwrapped.render()` — both bypass the passive checker |
+| Encoders | `imageio` 2.37.3 + Pillow 12.3.0 are installed, so **GIF works**. `imageio-ffmpeg` and system `ffmpeg` are absent → MP4 needs one of them |
+| GIF weight | ~14.6 MB for 150 frames at 480x480 (verified) — keep clips short or downscale |
+
+### Recipe 1 — custom PPO policy → GIF (verified end-to-end)
+
+```python
+# record_gif.py — run from the repo root: ./bin/python record_gif.py
+import imageio, torch
+from base_ppo import ActorNetwork            # also registers gym id Go1Env-v0
+from src.go1_env import go1_env
+from src.terrain.config import TerrainConfig
+
+ckpt = torch.load("ppo_checkpoint_latest.pth", map_location="cpu")
+actor = ActorNetwork(int(ckpt["state_dim"]), 12, max(0, int(ckpt["action_dim"]) - 12))
+actor.load_state_dict(ckpt["actor_state_dict"])
+actor.eval()
+
+env = go1_env(
+    xml_file="/home/plsh/rl_env2/mujoco_menagerie/unitree_go1/scene_obstacles.xml",
+    terrain_config=TerrainConfig(mode="hurdle"),   # or mode="flat" + scene.xml
+    cpg_mode=ckpt.get("cpg_mode", "off"),          # policy must match its CPG mode
+    residual_scale=0.10,
+    render_mode="rgb_array",                       # frames instead of a GLFW window
+)
+obs, _ = env.reset()
+frames = []
+for _ in range(150):                               # 1.5 s at dt = 0.01 s
+    with torch.no_grad():
+        action, _, _ = actor(torch.tensor(obs, dtype=torch.float32).unsqueeze(0))
+    obs, reward, terminated, truncated, info = env.step(action.numpy().flatten())
+    frames.append(env.render())
+    if terminated or truncated:
+        obs, _ = env.reset()
+env.close()
+imageio.mimsave("gifs/go1_hurdle_fixed_residual.gif", frames, fps=30, loop=0)
+print(len(frames), frames[0].shape, f"clearance={info['clearance_m']:.3f} m")
+# verified: 150 (480, 480, 3) -> gifs/go1_hurdle_fixed_residual.gif
+```
+
+Notes: pass the checkpoint's own `cpg_mode` (the actor's action head is 12-dim for
+`off`/`fixed_residual` and 18-dim for `parametric`/`hopf`); use absolute XML paths;
+`imageio.mimsave(..., fps=30, loop=0)` writes an endlessly looping GIF.
+
+### Recipe 2 — SB3 policy → GIF
+
+`src/eval_render.py` already contains the writer (`imageio.get_writer(output_gif,
+fps=30)` + `append_data(eval_env.render())`); switch its env to frames and it works:
+
+```python
+# src/eval_render.py:25 — human -> rgb_array
+eval_env = DummyVecEnv([lambda: go1_env(xml_file=EVAL_XML, render_mode="rgb_array")])
+```
+
+Verified in isolation: `DummyVecEnv([lambda: go1_env(..., render_mode="rgb_array")]).render()`
+returns `480x480x3` `uint8`, and `imageio.get_writer(path, fps=30)` + `append_data`
+produces a GIF. This path still needs 56-dim SB3 artifacts regenerated first, since
+the shipped `VecNormalize` stats abort the script (see the warning above).
+
+### Recipe 3 — MP4 / longer clips
+
+```bash
+pip install imageio-ffmpeg            # provides a bundled ffmpeg binary for imageio
+```
+
+```python
+imageio.mimsave("gifs/go1_rollout.mp4", frames, fps=30, codec="libx264")  # needs imageio-ffmpeg
+frames = [f[::2, ::2] for f in frames]                                    # 240x240: ~4x smaller
+```
+
+SB3 also offers `VecVideoRecorder(vec_env, "gifs", video_length=..., record_video_trigger=...)`,
+which likewise shells out to ffmpeg. With a system `ffmpeg` you can instead record the
+`render_mode="human"` window: `ffmpeg -f x11grab -framerate 30 -video_size 480x480 -i :0 -t 15 gifs/rollout.mp4`.
+Neither ffmpeg route has been exercised in this workspace — GIF capture (Recipes 1-2) is
+the verified path. For annotated videos, `customs_eval_render.py:_overlay_cpg(frame, info)`
+draws per-leg swing bars plus `phase / boost / dist / clear` text with `cv2`.
 
 ## Tests
 
@@ -372,7 +605,8 @@ are currently untracked.
 7. **Renderers need a display** and, because they use `render_mode="human"`,
    `env.render()` returns `None` — so `customs_eval_render.py` prints
    "No frames were captured" instead of writing a GIF. Use `rgb_array` (with a
-   display or EGL/OSMesa) to capture frames.
+   display or EGL/OSMesa) to capture frames; see
+   [Video & GIF capture](#video--gif-capture) for working recipes.
 8. **Hopf/parametric modes have unit-test coverage only** — no trained
    policy is checked in for them.
 9. `mujoco_menagerie/` is a vendored clone (large, untracked) — never edit the
