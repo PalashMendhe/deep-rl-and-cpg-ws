@@ -1,0 +1,58 @@
+# Created by venv; see https://docs.python.org/3/library/venv.html
+# ==========================================
+# Python Virtual Environments
+# ==========================================
+bin/
+include/
+lib/
+lib64/
+share/
+pyvenv.cfg
+.venv/
+env/
+venv/
+
+# ==========================================
+# Bytecode & Python Caches
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# ==========================================
+# RL Checkpoints, Weights & Model Artifacts
+# ==========================================
+*.pth
+*.pt
+*.zip
+*.pkl
+checkpoints/
+src/checkpoints/
+models/
+
+# ==========================================
+# Logs & TensorBoard
+# ==========================================
+src/logs/
+logs/
+*.tfevents.*
+
+# ==========================================
+# Evaluation Visualizations & Media
+# ==========================================
+gifs/
+evaluations/
+*.gif
+*.mp4
+*.avi
+
+# ==========================================
+# Jupyter & Editor Artifacts
+# ==========================================
+.ipynb_checkpoints/
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
