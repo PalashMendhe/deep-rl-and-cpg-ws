@@ -1,0 +1,171 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+  MUJOCO_GL: "osmesa"
+  PYTHONPATH: "."
+
+jobs:
+  lint:
+    name: Code Hygiene & Ruff Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run Ruff Lint
+        run: |
+          pip install ruff
+          ruff check .
+
+  model-check:
+    name: MuJoCo Model Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install MuJoCo
+        run: |
+          pip install --upgrade pip
+          pip install "mujoco>=3.10.0"
+
+      - name: Validate Scene XMLs
+        run: |
+          python tests/test_model_assets.py
+
+  test-matrix:
+    name: Test Suite (Python ${{ matrix.python-version }})
+    needs: [lint, model-check]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install System Dependencies for Headless Rendering
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1-mesa-glx \
+            libgl1-mesa-dri \
+            libosmesa6-dev \
+            xvfb
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install Dependencies (CPU-Optimized PyTorch)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements.txt
+
+      - name: Run Pytest Suite
+        run: |
+          xvfb-run -a pytest -v
+
+  render-artifact:
+    name: Headless Render & Visual Artifact
+    needs: [test-matrix]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install System Dependencies for Headless Rendering
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1-mesa-glx \
+            libgl1-mesa-dri \
+            libosmesa6-dev \
+            xvfb
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements.txt
+
+      - name: Generate Offscreen Rollout GIF
+        run: |
+          xvfb-run -a python -c "
+          import os, numpy as np, imageio
+          from src.go1_env import go1_env
+          env = go1_env(render_mode='rgb_array', cpg_mode='fixed_residual')
+          obs, _ = env.reset(seed=42)
+          frames = []
+          for _ in range(60):
+              action = np.zeros(env.action_space.shape, dtype=np.float32)
+              _, _, done, truncated, _ = env.step(action)
+              frame = env.render()
+              if frame is not None:
+                  frames.append(frame)
+              if done or truncated:
+                  break
+          env.close()
+          os.makedirs('ci_artifacts', exist_ok=True)
+          out_path = 'ci_artifacts/go1_ci_rollout.gif'
+          imageio.mimsave(out_path, frames, fps=20)
+          print(f'Successfully rendered {len(frames)} frames to {out_path}')
+          "
+
+      - name: Upload Rollout Visual Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: go1-ci-rollout-gif
+          path: ci_artifacts/go1_ci_rollout.gif
+          retention-days: 7
+
+  ci-status-gate:
+    name: CI Status Gate
+    if: always()
+    needs: [lint, model-check, test-matrix, render-artifact]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify All CI Jobs Succeeded
+        run: |
+          if [ "${{ needs.lint.result }}" != "success" ] || \
+             [ "${{ needs.model-check.result }}" != "success" ] || \
+             [ "${{ needs.test-matrix.result }}" != "success" ] || \
+             [ "${{ needs.render-artifact.result }}" != "success" ]; then
+            echo "CI pipeline failed on one or more upstream jobs." >&2
+            exit 1
+          fi
+          echo "All CI pipeline checks passed successfully."

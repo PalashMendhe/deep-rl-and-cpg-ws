@@ -13,10 +13,11 @@ from src.go1_env import go1_env
 from src.terrain.config import TerrainConfig
 
 RUN_NAME = "your_run_name"  # Replace with your desired run name
-CHECKPOINT_DIR = f"/home/plsh/rl_env2/src/checkpoints/{RUN_NAME}"
-LOG_DIR = f"/home/plsh/rl_env2/src/logs/{RUN_NAME}"
-FLAT_XML = "/home/plsh/rl_env2/mujoco_menagerie/unitree_go1/scene.xml"
-OBSTACLE_XML = "/home/plsh/rl_env2/mujoco_menagerie/unitree_go1/scene_obstacles.xml"
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CHECKPOINT_DIR = os.path.join(REPO_ROOT, "src", "checkpoints", RUN_NAME)
+LOG_DIR = os.path.join(REPO_ROOT, "src", "logs", RUN_NAME)
+FLAT_XML = os.path.join(REPO_ROOT, "mujoco_menagerie", "unitree_go1", "scene.xml")
+OBSTACLE_XML = os.path.join(REPO_ROOT, "mujoco_menagerie", "unitree_go1", "scene_obstacles.xml")
 # Curriculum stage: 0 = flat trot, 1 = bumps, 2 = hurdle. Override via env.
 CURRICULUM_STAGE = int(os.environ.get("GO1_STAGE", "0"))
 CPG_MODE = os.environ.get("GO1_CPG_MODE", "off")  # SB3 path stays cpg off for now

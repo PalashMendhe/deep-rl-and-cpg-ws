@@ -84,7 +84,7 @@ print(f"Eval: stage={STAGE} xml={os.path.basename(EVAL_XML)} cpg_mode={cpg_mode}
       f"actor=({state_dim},{residual_dim}+{mod_dim})")
 
 env = gym.make("Go1Env-v0", xml_file=EVAL_XML, cpg_mode=cpg_mode,
-               residual_scale=0.10, render_mode="human")
+               residual_scale=0.10, render_mode="human")  # Use "human" for live rendering, "rgb_array" for GIF capture.
 state, _ = env.reset()
 assert state.shape == (state_dim,), f"obs {state.shape} != actor ({state_dim},)"
 

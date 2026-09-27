@@ -33,8 +33,9 @@ STATE_DIM = 56          # 52 proprio + 4 hurdle-relative extras
 RESIDUAL_DIM = 12
 MOD_DIM = 6 if CPG_MODE in ("parametric", "hopf") else 0
 ACTION_DIM = RESIDUAL_DIM + MOD_DIM  # 12 for off/fixed, 18 for parametric/hopf
-FLAT_XML = "/home/plsh/rl_env2/mujoco_menagerie/unitree_go1/scene.xml"
-OBSTACLE_XML = "/home/plsh/rl_env2/mujoco_menagerie/unitree_go1/scene_obstacles.xml"
+REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+FLAT_XML = os.path.join(REPO_ROOT, "mujoco_menagerie", "unitree_go1", "scene.xml")
+OBSTACLE_XML = os.path.join(REPO_ROOT, "mujoco_menagerie", "unitree_go1", "scene_obstacles.xml")
 STAGE0_END = int(os.environ.get("GO1_STAGE0_END", "1500000"))  # flat
 STAGE1_END = int(os.environ.get("GO1_STAGE1_END", "3000000"))  # rough
 

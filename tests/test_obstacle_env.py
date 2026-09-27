@@ -12,8 +12,9 @@ import numpy as np
 from src.go1_env import go1_env
 from src.terrain.config import TerrainConfig
 
-FLAT_XML = "/home/plsh/rl_env2/mujoco_menagerie/unitree_go1/scene.xml"
-OBST_XML = "/home/plsh/rl_env2/mujoco_menagerie/unitree_go1/scene_obstacles.xml"
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FLAT_XML = os.path.join(REPO_ROOT, "mujoco_menagerie", "unitree_go1", "scene.xml")
+OBST_XML = os.path.join(REPO_ROOT, "mujoco_menagerie", "unitree_go1", "scene_obstacles.xml")
 
 
 def test_flat_default_obs_is_56_with_neutral_extras():

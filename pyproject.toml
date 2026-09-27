@@ -1,0 +1,50 @@
+[tool.pytest.ini_options]
+addopts = "-v --strict-markers"
+testpaths = ["tests"]
+norecursedirs = [
+    "lib",
+    "lib64",
+    "bin",
+    "include",
+    "share",
+    "mujoco_menagerie",
+    "gifs",
+    ".git",
+    "__pycache__",
+]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+exclude = [
+    "lib",
+    "lib64",
+    "bin",
+    "include",
+    "share",
+    "mujoco_menagerie",
+    ".git",
+    "__pycache__",
+    "gifs",
+]
+
+[tool.ruff.lint]
+select = ["E", "F"]
+ignore = [
+    "E501",  # line too long
+    "E402",  # module level import not at top of file
+    "F401",  # imported but unused
+    "F841",  # local variable assigned but never used
+    "W291",  # trailing whitespace
+    "W292",  # no newline at end of file
+    "W293",  # blank line contains whitespace
+    "E741",  # ambiguous variable name (e.g. l)
+    "E712",  # comparison to True/False
+]

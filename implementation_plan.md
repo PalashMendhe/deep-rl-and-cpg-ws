@@ -68,3 +68,97 @@ Ground truth: effective env is the SECOND `go1_env` in `src/go1_env.py` (line 31
 7. Stage-B parametric: `src/cpg/parametric.py`, 18-dim actor `[12+6]`, `RolloutBuffer/main()` + `src/train.py` parity; train rough+hurdle with modulated freq/amp + `jump_boost`.
 8. Stage-C Hopf + feedback: `src/cpg/hopf.py` with contact feedback; `cpg_mode="hopf"`; stability + integration tests; tune clip/entropy.
 9. Renderers: obstacle scene, CPG overlay, per-stage GIFs + 20-episode hurdle eval (0.12-0.15 m) + flat regression GIF.
+
+---
+
+# Phase 2 — CI/CD & GitHub Actions Automation
+
+## CI/CD Overview & Objectives
+Automate code quality, MuJoCo model compilation, CPG unit verification, headless quadruped environment integration, and visual artifact generation via GitHub Actions. Ensure reproducible continuous integration across multiple Python environments while handling headless rendering, eliminating hardcoded filesystem paths, and properly tracking robot asset files.
+
+## Target Matrix & Environment
+- **Runner**: `ubuntu-latest` (Ubuntu 22.04 / 24.04).
+- **Python Matrix**: `3.10`, `3.11`, `3.12`.
+- **PyTorch Optimization**: CPU-only PyTorch build (`--extra-index-url https://download.pytorch.org/whl/cpu`) to bypass multi-gigabyte CUDA wheel downloads and cap runner setup time under 30s.
+- **Headless Graphics Engine**: `libgl1-mesa-glx`, `libgl1-mesa-dri`, `libosmesa6-dev`, and `xvfb` with `MUJOCO_GL=osmesa` (or `egl` fallback) for offscreen OpenGL rendering.
+
+## Pipeline Architecture & Jobs
+```mermaid
+flowchart TD
+    Trigger["Push / PR to main / workflow_dispatch"] --> Lint["Job 1: Lint & Code Hygiene<br/>Ruff, format, import sorting"]
+    Trigger --> XML["Job 2: MuJoCo Model Validation<br/>scene.xml & scene_obstacles.xml compilation"]
+    Lint --> Matrix["Job 3: Unit Tests Matrix<br/>Python 3.10, 3.11, 3.12<br/>CPG math, clipping, Hopf stability"]
+    XML --> Matrix
+    Matrix --> EnvInt["Job 4: Env Integration & Simulation<br/>Flat/Rough/Hurdle rollouts, obs 52/56, seeds"]
+    EnvInt --> Render["Job 5: Headless Render & Visual Artifacts<br/>60-step rollout GIF generation via OSMesa/Xvfb"]
+    Render --> ArtifactUpload["Upload rollout GIF artifact"]
+    EnvInt --> StatusGate["Job 6: CI Status Gate<br/>Unified required branch protection check"]
+    Render --> StatusGate
+```
+
+### Job Specifications
+1. **`lint-and-syntax`**:
+   - Tool: `ruff` (linter and formatter) for fast, unified Python linting (< 5s).
+   - Rules: Syntax errors, undefined names, unused imports, standard PEP8 conventions.
+   - Action: `ruff check .` and `ruff format --check .`
+2. **`model-validation`**:
+   - Headless check ensuring all MuJoCo XML files (`mujoco_menagerie/unitree_go1/scene.xml`, `scene_obstacles.xml`, `go1.xml`) parse and compile via `mujoco.MjModel.from_xml_path(...)` without missing STL meshes or broken includes.
+3. **`unit-tests` (Matrix: Python 3.10, 3.11, 3.12)**:
+   - Run CPG mathematical unit tests: antisymmetry, swing drive sign, action modulation clipping, Hopf oscillator 5s stability, Kuramoto phase advance under foot contact.
+   - Run terrain configuration tests: hurdle sampling, bump positions, seed determinism.
+4. **`env-integration`**:
+   - Test `Go1Env-v0` instantiation and 200-step simulation across `cpg_mode="off"`, `fixed_residual`, `parametric`, `hopf`.
+   - Verify observation vector dimension (52 compat vs 56 extended prefix match).
+   - Test hurdle collision detector and jump reward calculation.
+   - PPO policy network forward/backward gradient step smoke check.
+5. **`render-smoke-and-artifact`**:
+   - Headless offscreen render of 60 frames using `MUJOCO_GL=osmesa` or `xvfb-run`.
+   - Generate and upload `go1_ci_smoke.gif` as a GitHub Actions workflow artifact for instant visual review on Pull Requests.
+6. **`ci-gate`**:
+   - Single synthetic check aggregating upstream dependencies, used as the required status check for GitHub branch protection rules.
+7. **Optional Dispatch / Schedule: `training-smoke`**:
+   - `workflow_dispatch` trigger to run 5,000 steps of `base_ppo.py` to verify actor-critic loss convergence and buffer stepping without numerical overflow.
+
+## Prerequisites & Codebase Updates Needed
+1. **Eliminate Hardcoded Paths**:
+   - Replace `/home/plsh/rl_env2/...` with dynamic repository-root resolution (`Path(__file__).resolve().parent...` or `os.path.dirname(...)`) across:
+     - `src/go1_env.py` (default `xml_file`)
+     - `base_ppo.py` (`FLAT_XML`, `OBSTACLE_XML`)
+     - `src/train.py` (`CHECKPOINT_DIR`, `LOG_DIR`, `FLAT_XML`, `OBSTACLE_XML`)
+     - `src/eval_render.py` (`CHECKPOINT_DIR`, model path)
+     - `tests/test_obstacle_env.py` (`FLAT_XML`, `OBST_XML`)
+2. **Track Robot Assets (`mujoco_menagerie/unitree_go1`)**:
+   - `mujoco_menagerie` currently contains a standalone `.git` repository, causing git to treat it as an untracked directory and omitting `unitree_go1/` meshes and XMLs from the main git tree.
+   - Remove internal `.git` metadata from `mujoco_menagerie` and track `mujoco_menagerie/unitree_go1/` in the main repository so GitHub Actions runners have access to all mesh STLs and XML descriptions upon `actions/checkout`.
+3. **Root Manifests**:
+   - Create `requirements.txt`: core runtime dependencies (`gymnasium[mujoco]>=1.3.0`, `mujoco>=3.10.0`, `torch>=2.1.0`, `numpy>=1.26.0,<3.0.0`, `scipy>=1.14.0`, `imageio>=2.34.0`, `stable-baselines3>=2.9.0`).
+   - Create `requirements-dev.txt`: developer & CI tools (`pytest>=8.0.0`, `ruff>=0.5.0`, `pytest-timeout>=2.3.0`).
+   - Create `pytest.ini`: isolate `tests/` directory and explicitly exclude virtual environment dirs (`lib/`, `bin/`, `include/`, `mujoco_menagerie/`, `gifs/`).
+
+## CI/CD Files to Create / Modify
+- NEW `.github/workflows/ci.yml`: Multi-job GitHub Actions pipeline.
+- NEW `.github/workflows/training_smoke.yml`: Manual/scheduled training loop verification.
+- NEW `requirements.txt` & `requirements-dev.txt`: Explicit pinned and minimum dependencies.
+- NEW `pytest.ini`: Pytest discovery configuration preventing root venv scan recursion.
+- NEW `tests/test_model_assets.py`: Headless validation of MuJoCo scene XMLs and mesh assets.
+- NEW `tests/test_render_headless.py`: Offscreen rendering and GIF writer smoke test.
+- NEW `scripts/run_ci_local.sh`: One-command shell script to run Ruff, model compilation, unit tests, and integration tests locally before pushing.
+- MODIFY `src/go1_env.py`, `base_ppo.py`, `src/train.py`, `src/eval_render.py`, `tests/test_obstacle_env.py`: Relative path fixes.
+
+## Implementation Order (Phase 2)
+10. **Path Portability & Asset Bundling**:
+    - Remove hardcoded `/home/plsh/rl_env2` in all 5 files, replacing with dynamic repo-root resolution.
+    - Remove `mujoco_menagerie/.git` and track `mujoco_menagerie/unitree_go1/` (including `scene_obstacles.xml`) in root git repository.
+11. **Configuration & Dependency Manifests**:
+    - Add `requirements.txt`, `requirements-dev.txt`, and `pytest.ini`.
+    - Verify `pytest` command only discovers `tests/` without recursing into `lib/` or `bin/`.
+12. **Asset & Headless Render Test Fixtures**:
+    - Create `tests/test_model_assets.py` to validate XML parsing.
+    - Create `tests/test_render_headless.py` to validate offscreen frame capture with OSMesa/EGL.
+13. **GitHub Actions Workflow Creation**:
+    - Author `.github/workflows/ci.yml` with lint, matrix unit tests, integration tests, offscreen render artifact upload, and unified CI gate.
+14. **Local CI Verification Script**:
+    - Write `scripts/run_ci_local.sh` and execute locally to ensure all linting, asset parsing, and tests pass with 0 exit code.
+15. **Git Commit, Push & Remote Verification**:
+    - Commit all files, push to `origin/main`, trigger the GitHub Actions workflow, and verify green checkmarks on GitHub.
+

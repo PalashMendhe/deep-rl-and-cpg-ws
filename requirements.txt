@@ -1,0 +1,14 @@
+# Core Quadruped Simulation & RL
+gymnasium[mujoco]>=1.3.0
+mujoco>=3.10.0
+torch>=2.1.0
+numpy>=1.26.0,<3.0.0
+scipy>=1.14.0
+imageio>=2.34.0
+imageio-ffmpeg>=0.4.9
+stable-baselines3>=2.9.0
+
+# CI & Testing
+pytest>=8.0.0
+pytest-timeout>=2.3.0
+ruff>=0.5.0

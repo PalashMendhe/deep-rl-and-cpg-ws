@@ -5,6 +5,7 @@
 bin/
 include/
 lib/
+lib64
 lib64/
 share/
 pyvenv.cfg
@@ -19,6 +20,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
+.ruff_cache/
+ci_artifacts/
 
 # ==========================================
 # RL Checkpoints, Weights & Model Artifacts

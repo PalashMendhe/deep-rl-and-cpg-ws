@@ -6,15 +6,20 @@ import numpy as np
 import os
 from src.go1_env import go1_env
 
-# Define paths for model and vector normalization files, as well as the output GIF file.
-CHECKPOINT_DIR = os.path.expanduser("/home/plsh/rl_env2/src/checkpoints/your_run_name")      # Replace with your actual checkpoint directory
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CHECKPOINT_DIR = os.environ.get("GO1_CHECKPOINT_DIR", os.path.join(REPO_ROOT, "src", "checkpoints", "your_run_name"))
 model_path = os.path.join(CHECKPOINT_DIR, "rl_model_120000_steps.zip")              # Path to the trained model file.
 vecnorm_path = os.path.join(CHECKPOINT_DIR, "latest_vecnormalize.pkl")          # Path to the vector normalization file.
 EVAL_STAGE = os.environ.get("GO1_EVAL_STAGE", "flat")  # flat | hurdle
 EVAL_XML = os.environ.get(
     "GO1_EVAL_XML",
-    "/home/plsh/rl_env2/mujoco_menagerie/unitree_go1/" +
-    ("scene_obstacles.xml" if EVAL_STAGE == "hurdle" else "scene.xml"))
+    os.path.join(
+        REPO_ROOT,
+        "mujoco_menagerie",
+        "unitree_go1",
+        "scene_obstacles.xml" if EVAL_STAGE == "hurdle" else "scene.xml",
+    ),
+)
 output_gif = os.path.join(CHECKPOINT_DIR, f"output_{EVAL_STAGE}.gif")                  # Path to save the output GIF.
 
 '''
@@ -40,7 +45,7 @@ if viewer is not None:
     viewer.cam.distance = 3.0
     viewer.cam.elevation = -20
 
-SAVE_GIF = os.environ.get("GO1_SAVE_GIF", "0") == "0"  # GIF slows rendering; opt in per run.
+SAVE_GIF = os.environ.get("GO1_SAVE_GIF", "0") == "1"  # GIF slows rendering; opt in per run.
 if SAVE_GIF:
     writer = imageio.get_writer(output_gif, fps=30)
 

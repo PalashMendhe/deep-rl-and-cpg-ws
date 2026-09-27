@@ -17,9 +17,17 @@ from scipy.spatial.transform import Rotation as R
 #-------------------------------------------------------------#----#
 '''
 
+import os
 import mujoco
 from src.terrain.config import TerrainConfig
 from typing import NamedTuple
+
+_DEFAULT_XML_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "mujoco_menagerie",
+    "unitree_go1",
+    "scene.xml",
+)
 
 
 class JumpEvent(NamedTuple):
@@ -30,7 +38,7 @@ class JumpEvent(NamedTuple):
 
 
 class go1_env(MujocoEnv, utils.EzPickle):
-    def __init__(self, xml_file = '/home/plsh/rl_env2/mujoco_menagerie/unitree_go1/scene.xml',
+    def __init__(self, xml_file = _DEFAULT_XML_PATH,
                  large_step_penalty = 0.5,                                #Penalize the bot when it takes a step too large.
                  contact_penalty = 0.005,                                 #Penalize bot when the external contact force is too large.
                  timestep_reward = 0.001,                                 #Reward the bot for each timestep it is healthy.
