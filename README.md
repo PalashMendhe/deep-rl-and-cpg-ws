@@ -1,6 +1,6 @@
 # deep-rl-and-cpg-ws
 
-Deep-RL + CPG locomotion stack for the **Unitree Go1** quadruped in MuJoCo: an obstacle-aware Gymnasium environment, a three-stage curriculum (**flat → rough → hurdle jump**), and hybrid controllers pairing a Central Pattern Generator (CPG) with a PPO residual policy.
+Deep-RL + CPG locomotion stack for the **Unitree Go1** quadruped in MuJoCo: an obstacle-aware Gymnasium environment, a three-stage curriculum (**flat → rough → hurdle jump(under development)**), and hybrid controllers pairing a Central Pattern Generator (CPG) with a PPO residual policy.
 
 <p align="center">
   <img src="gifs/go1_walking.gif" alt="Unitree Go1 Locomotion" width="700"/>
@@ -478,7 +478,11 @@ All generated artifacts (`*.pth`, `*.zip`, `*.pkl`, `src/logs/`, `gifs/`) are gi
 | `implementation_plan.md` | Architecture design: obstacle handling, staged CPG integration, test specifications |
 | `balance_walk_analysis.md` | Analysis and fixes for locomotion stability and CPG joint sign alignment |
 
+## Use of AI and Agents
+Multiple AI models like Deepseek v4.1/v4.0 flash, Muse Spark 3.1 Contributer, GLM 5.3 Flash, etc have been used to develop and write the code for the project. Everything that's written over here is reviewed by me. The alpha version(without CPG and minor AI use) can be found here -> https://github.com/PalashMendhe/Reinforcement-learning-ws-go1.
+
 ## Credits & license
 
 - **Robot Model & Assets**: Vendored from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie) Unitree Go1 (BSD-3-Clause, © Unitree Robotics).
 - **Libraries**: Built with [Gymnasium](https://gymnasium.farama.org/), [MuJoCo](https://mujoco.org/), [Stable-Baselines3](https://stable-baselines3.readthedocs.io/), and [PyTorch](https://pytorch.org/).
+- **License**: MIT © Palash Siddharth Mendhe
