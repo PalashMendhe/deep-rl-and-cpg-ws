@@ -1,19 +1,16 @@
 # deep-rl-and-cpg-ws
 
-Deep-RL + CPG locomotion stack for the **Unitree Go1** quadruped in MuJoCo:
-an obstacle-aware Gymnasium environment, a three-stage curriculum
-(**flat → rough → hurdle jump**), and hybrid controllers that pair a Central
-Pattern Generator (CPG) with a PPO residual policy.
+Deep-RL + CPG locomotion stack for the **Unitree Go1** quadruped in MuJoCo: an obstacle-aware Gymnasium environment, a three-stage curriculum (**flat → rough → hurdle jump**), and hybrid controllers pairing a Central Pattern Generator (CPG) with a PPO residual policy.
 
 <p align="center">
   <img src="gifs/go1_walking.gif" alt="Unitree Go1 Locomotion" width="700"/>
 </p>
 
-Two runnable training stacks are kept side by side:
+Two runnable training stacks are provided:
 
 | Stack | Entry point | Role | Checkpoints |
 | :--- | :--- | :--- | :--- |
-| Custom PPO | `base_ppo.py` | **Primary** — CPG stages + obstacle curriculum, hand-written actor/critic/loss | `ppo_checkpoint_*.pth` (repo root) |
+| Custom PPO | `base_ppo.py` | **Primary** — CPG stages + obstacle curriculum, custom actor/critic/loss | `ppo_checkpoint_*.pth` (repo root) |
 | Stable-Baselines3 PPO | `src/train.py` | Secondary baseline — CPG `off`, `VecNormalize` | `src/checkpoints/your_run_name/` |
 
 ## System architecture
@@ -133,24 +130,15 @@ flowchart TB
 
 </details>
 
-Reading the diagram from the outside in:
+Dataflow summary:
 
-1. **Assets** — the vendored Go1 model carries the actuators and the four `*_Touch`
-   foot sensors used by the reward and the Hopf feedback; the two scenes are never
-   mutated on disk.
-2. **Terrain** — `TerrainConfig` plus `stage_for_step()` decide which world is loaded
-   and re-seed hurdle/bump poses on every reset.
-3. **Env** — `go1_env` turns a 12- or 18-dim action into 12 joint targets (CPG base +
-   residual), simulates, and emits the 56-dim observation, the 9-dim privileged critic
-   vector, the reward and the full `info` breakdown.
-4. **CPG** — the selected generator supplies the base gait; the policy only supplies
-   residuals, and in `parametric`/`hopf` also the 6 modulation values.
-5. **Training** — two independent loops write their own checkpoints: custom PPO at the
-   repo root, SB3 under `src/`.
-6. **Evaluation** — each renderer loads its own checkpoints and records rollouts into
-   `gifs/` (see [Video & GIF capture](#video--gif-capture)).
-7. **Tests** — offline gates assert the obs/action contract, obstacle randomization and
-   CPG kinematics without needing a trained policy.
+1. **Assets** — Vendored Go1 model (12 actuators, 4 `*_Touch` sensors); scene XMLs are kept static on disk.
+2. **Terrain** — `TerrainConfig` + `stage_for_step()` select the scene and randomize hurdle/bump positions on each reset.
+3. **Env** — `go1_env` converts actions into 12 joint targets (CPG base + residual), stepping MuJoCo at 100 Hz (`dt = 0.01 s`). Emits 56-dim obs, 9-dim privileged critic obs, reward, and diagnostics.
+4. **CPG** — Supplies the nominal gait trajectory; policy provides residual offsets (and 6 modulation params for `parametric`/`hopf`).
+5. **Training** — Two independent pipelines: custom PPO (`base_ppo.py`) and SB3 (`src/train.py`).
+6. **Evaluation** — Renderers evaluate checkpoints and record rollouts to `gifs/` (see [Video & GIF capture](#video--gif-capture)).
+7. **Tests** — Fast test suite validating shapes, obstacle randomization, and CPG kinematics without requiring policies.
 
 ## Status (verified in this working tree)
 
@@ -160,13 +148,12 @@ Run with the in-repo virtualenv interpreter (`./bin/python`, Python 3.14.4):
 | :--- | :--- | :--- |
 | CPG unit tests | `./bin/python tests/test_cpg.py` | **6/6 passed** |
 | Env / obstacle integration tests | `./bin/python tests/test_obstacle_env.py` | **9/9 passed** |
-| SB3 training launch | `./bin/python -m src.train` | starts; detects stale 49-dim `VecNormalize` and refits fresh 56-dim stats |
-| Env spec probe | `go1_env` with each `cpg_mode` | obs `(56,)`, action `(12,)` / `(18,)`, `dt=0.01`, `frame_skip=5`, privileged obs `(9,)` |
-| Custom PPO launch | `./bin/python base_ppo.py` | sanity check passes (`Obs shape: (56,)`) and resumes from `ppo_checkpoint_latest.pth` (global step 6,000,640) |
-| Custom-PPO renderer | `./bin/python customs_eval_render.py` | runs; resolves `ppo_checkpoint_latest.pth` → `actor=(56,12+0)`, `cpg_mode=fixed_residual`, prints hit/success/clearance line |
+| SB3 training launch | `./bin/python -m src.train` | Starts; detects stale 49-dim `VecNormalize` and refits 56-dim stats |
+| Env spec probe | `go1_env` with each `cpg_mode` | `obs=(56,)`, `action=(12,)` or `(18,)`, `dt=0.01s`, `frame_skip=5`, `priv=(9,)` |
+| Custom PPO launch | `./bin/python base_ppo.py` | Sanity check passes; resumes from `ppo_checkpoint_latest.pth` |
+| Custom-PPO renderer | `./bin/python customs_eval_render.py` | Runs; resolves checkpoint, displays rollout and logs clearance/success |
 
-> `pytest` is **not** installed in the venv, so both test modules ship a
-> `__main__` shim and are run as plain scripts (see [Tests](#tests)).
+> `pytest` is not installed; tests run directly as scripts via `python <test_file>` (see [Tests](#tests)).
 
 ## Repository layout
 
@@ -195,8 +182,7 @@ clean_up.md                    Log of the repo cleanup pass (archive-then-verify
 
 ## Install / environment
 
-The repo already contains a virtualenv at its root (`bin/`, `lib/`, `lib64`,
-`share/`, `pyvenv.cfg` — all gitignored). Use it, or build an equivalent one:
+Use the pre-configured virtual environment at the repository root (`./bin/python`), or create an equivalent one:
 
 ```bash
 python3 -m venv .venv
@@ -205,127 +191,93 @@ pip install "gymnasium[mujoco]==1.3.0" "stable-baselines3[extra]==2.9.0" \
             numpy scipy imageio torch
 ```
 
-Versions the current venv resolves to (CPU is used for training; torch is a CUDA build):
+Environment package versions:
 
-| Package | Version |
-| :--- | :--- |
-| Python | 3.14.4 |
-| gymnasium | 1.3.0 |
-| mujoco | 3.10.0 |
-| stable-baselines3 | 2.9.0 |
-| torch | 2.13.0+cu130 |
-| numpy | 2.5.1 |
-| scipy | 1.18.0 |
-| imageio | 2.37.3 |
-| cv2 (optional) | 5.0.0 — CPG overlay in `customs_eval_render.py` |
+| Package | Version | Package | Version |
+| :--- | :--- | :--- | :--- |
+| Python | 3.14.4 | PyTorch | 2.13.0+cu130 |
+| Gymnasium | 1.3.0 | NumPy | 2.5.1 |
+| MuJoCo | 3.10.0 | SciPy | 1.18.0 |
+| Stable-Baselines3 | 2.9.0 | ImageIO | 2.37.3 |
+| OpenCV (optional) | 5.0.0 | | |
 
-**Robot assets.** `mujoco_menagerie/unitree_go1/` supplies `go1.xml` (with the
-four `*_Touch` foot sensors the env reads), `scene.xml` (flat world) and
-`scene_obstacles.xml` (three low bumps + a hurdle). The vendored scenes are
-never edited in place — obstacle geometry is moved at runtime instead.
+**Robot assets**: `mujoco_menagerie/unitree_go1/` supplies `go1.xml` (12 joint actuators, 4 `*_Touch` sensors), `scene.xml` (flat), and `scene_obstacles.xml` (3 bumps + hurdle). Obstacles are dynamically repositioned at runtime; scene files are never edited on disk.
 
-> ⚠️ **Absolute paths.** `base_ppo.py`, `src/train.py`, `src/eval_render.py` and
-> the `xml_file` default of `go1_env.__init__` hardcode
-> `/home/plsh/rl_env2/...`. Clone to that path or update those constants.
+> ⚠️ **Absolute paths**: `base_ppo.py`, `src/train.py`, `src/eval_render.py`, and `go1_env.__init__` hardcode `/home/plsh/rl_env2/...`. Update these paths if the repository is cloned elsewhere.
 
 ## The environment — `src/go1_env.py`
 
-`go1_env(xml_file=..., terrain_config=TerrainConfig(...), cpg_mode=..., ...)` extends
-`gymnasium.envs.mujoco.MujocoEnv` with `frame_skip=5` on a `0.002 s` MuJoCo step,
-so the control step is `dt = 0.01 s` (100 Hz).
+`go1_env(xml_file=..., terrain_config=TerrainConfig(...), cpg_mode=...)` extends `gymnasium.envs.mujoco.MujocoEnv`. With `frame_skip=5` and MuJoCo `0.002 s` simulation steps, the effective control step is `dt = 0.01 s` (100 Hz).
 
 ### Observation — 56-dim (`include_ext_obs=True`, the default)
 
 | Block | Dim | Content |
 | :--- | :--- | :--- |
-| Position | 31 | trunk `z` (1; `x,y` dropped via `exclude_current_position_from_observation`), trunk roll/pitch/yaw (3), joint positions (12), gravity vector in body frame (3), previous 12 residual actions (12) |
-| Velocity | 18 | trunk linear velocity (3), trunk angular velocity (3), joint velocities (12) |
-| Target | 3 | commanded body-frame velocity `[0.6, 0.0, 0.0]` |
-| Obstacle extras | 4 | `dist_to_hurdle/5` (clipped to `[-2, 10]`), normalized hurdle height, trunk clearance over hurdle top, vertical velocity `vz` |
+| Position | 31 | Trunk `z` (1), roll/pitch/yaw (3), joint positions (12), gravity vector in body frame (3), previous residual actions (12) |
+| Velocity | 18 | Trunk linear velocity (3), trunk angular velocity (3), joint velocities (12) |
+| Target | 3 | Commanded body-frame velocity `[0.6, 0.0, 0.0]` |
+| Obstacle extras | 4 | Normalized distance to hurdle `[-2, 10]`, hurdle height, trunk clearance over hurdle top, vertical velocity `vz` |
 
-* `include_ext_obs=False` restores the **52-dim** legacy observation (its first 52
-  entries are byte-identical to the 56-dim prefix — a regression test enforces this).
-* `_get_privileged_obs()` returns a **9-dim** extras vector (`ext_obs` + 4 foot
-  contacts + trunk `z`) for an asymmetric critic (`CriticNetwork.asymmetric`).
+- **Legacy observation (52-dim)**: Set `include_ext_obs=False` to omit obstacle extras (identical to the first 52 dims of the default obs).
+- **Privileged critic observation (9-dim)**: `_get_privileged_obs()` returns obstacle extras + 4 foot contact flags + trunk `z` for asymmetric critic training (`CriticNetwork.asymmetric`).
 
 ### Action
 
 | `cpg_mode` | Action dim | Meaning |
 | :--- | :--- | :--- |
-| `off` | 12 | `home_qpos[7:] + action * 0.25` (legacy joint-position control) |
-| `fixed_residual` | 12 | open-loop trot targets + `action * residual_scale` |
-| `parametric` | 18 | `[12 residual │ 6 mod]` — mod vector drives CPG params |
-| `hopf` | 18 | `[12 residual │ 6 mod]` + foot-contact feedback in the oscillator dynamics |
+| `off` | 12 | Direct joint positions: `home_qpos[7:] + action * 0.25` |
+| `fixed_residual` | 12 | Fixed trot base + `action * residual_scale` |
+| `parametric` | 18 | `[12 residual │ 6 mod]` — mod vector drives CPG parameters |
+| `hopf` | 18 | `[12 residual │ 6 mod]` + foot-contact oscillator feedback |
 
-Actions are box-bounded to `[-1, 1]`; the `go1_env` default `residual_scale` is
-`0.25` (`base_ppo.py` overrides it with a curriculum schedule, see below).
+Actions are bounded in `[-1, 1]`. Default `residual_scale` is `0.25` (`base_ppo.py` overrides this with a curriculum schedule).
 
 ### Reward
 
-```
-reward =  3.0 * velocity_reward                                   # exp(-4*(vx_local - 0.6)^2)
-        + 0.001                                                   # survival bonus
-        - 0.005 * mean((action12 - last12)^2)                     # action smoothness
-        - navigation_penalty                                      # 0.5*vy^2 + 0.3*yaw_rate^2 + 0.5*heading_err^2
-        - form_weight * kinematic_penalty
-        + 2.0 * jump_bonus                                        # approach + airtime/clearance (hurdle stages)
-        + landing_bonus                                           # <= landing_bonus_w (first clean touchdown)
-        - 5.0 * hurdle_hit                                        # contact with the hurdle
+```python
+reward = (
+    3.0 * velocity_reward                     # exp(-4 * (vx_local - 0.6)^2)
+    + 0.001                                   # survival bonus
+    - 0.005 * mean((action12 - last12)^2)     # action smoothness
+    - navigation_penalty                      # 0.5*vy^2 + 0.3*yaw_rate^2 + 0.5*heading_err^2
+    - form_weight * kinematic_penalty
+    + 2.0 * jump_bonus                        # approach + airtime/clearance (hurdle stages)
+    + landing_bonus                           # clean first touchdown (<= landing_bonus_w)
+    - 5.0 * hurdle_hit                        # penalty on hurdle contact
+)
 reward = clip(reward, -10.0, 10.0)
 ```
 
-where `kinematic_penalty = 2.0*trot_flag + 5.0*max(0, 0.10 - |diag_height_diff|)^2
-+ 3.0*(roll^2 + pitch^2) + 0.005*Σaction^2 + 0.0005*Σjoint_vel^2`.
-
-Two shaping switches matter:
-
-* **`form_weight`** is read as `getattr(self, "form_weight", 0.0)` — i.e. **all**
-  kinematic penalties are off unless the training loop sets the attribute.
-  `base_ppo.py` sets it every step (0.2 → 1.0).
-* `hurdle_hit_penalty`, `jump_reward_w` and `landing_bonus_w` are constructor
-  arguments (`5.0`, `2.0`, `1.0` by default).
-
-**Episode ends** when the trunk leaves `healthy_z_range = (0.25, 0.45)` (reward
-forced to `-2.0`), or on hurdle contact when `hurdle_hit_terminate=True`.
-`info` exposes the full breakdown: `velocity_reward`, `local_x/y_velocity`,
-`current_height`, `distance_from_origin`, `action_smoothness_penalty`,
-`navigation_penalty_total`, `kinematic_penalty_scaled`, `raw_trot_flag`,
-`raw_clearance_error`, `raw_posture_penalty`, `active_form_weight`,
-`dist_to_hurdle`, `clearance_m`, `hurdle_hit`, `jump_bonus`, `landing_bonus`,
-`jump_success`, `cpg_phase`, `cpg_freq`, `cpg_mode`, `jump_boost`, `last_mod`.
+- **Kinematic penalty**: Penalizes diagonal trot desynchronization, foot clearance error, trunk orientation (roll/pitch), action magnitude, and joint velocities.
+- **Form weight**: Governed by `form_weight` attribute (defaults to `0.0`; scheduled `0.2 → 1.0` in `base_ppo.py`).
+- **Termination**: Ends if trunk height leaves `healthy_z_range = (0.25, 0.45)` (penalty `-2.0`), or on hurdle contact if `hurdle_hit_terminate=True`.
+- **Diagnostics**: `info` dictionary provides breakdowns of velocity rewards, penalties, clearance, jump/landing bonuses, and active CPG state.
 
 ## CPG modes — `src/cpg/`
 
-Leg order is always **`[FR, FL, RR, RL]`** (3 joints each: hip, thigh, calf);
-the diagonal pairs `(FL, RR)` and `(FR, RL)` are antiphase.
+Leg ordering is **`[FR, FL, RR, RL]`** (hip, thigh, calf each). Diagonal pairs `(FL, RR)` and `(FR, RL)` operate in anti-phase.
 
 | Mode | Class | Behaviour |
 | :--- | :--- | :--- |
-| `off` | – | No CPG; legacy direct joint targeting. |
-| `fixed_residual` | `FixedTrotCPG` | Analytic trot around a tall stance `[0, 0.8, -1.5]` with a one-cycle ease-in ramp; the policy only adds `residual_scale`-scaled corrections. All four thigh axes are `[0,1,0]`, so swing-forward is a **negative** delta on every leg (`THIGH_DIRS = [-1,-1,-1,-1]`). |
-| `parametric` | `ParametricCPG` | Policy emits 6 mod values → `[freq (1.5–3.0 Hz), thigh amp ±50%, calf amp ±50%, phase offset, duty (0.3–0.7), jump_boost (0–1)]`; `jump_boost` blends the trot toward a symmetric crouch-tuck for jumping. |
-| `hopf` | `HopfCPGNetwork` | Four Hopf amplitude oscillators (`dr = α(μ − r²)r`) with Kuramoto trot coupling and a per-leg foot-contact phase pull (`k_fb`). Gains can be retuned live with `set_gains()`. |
+| `off` | – | Direct joint position targeting without CPG. |
+| `fixed_residual` | `FixedTrotCPG` | Analytic trot around nominal tall stance `[0, 0.8, -1.5]` with smooth ease-in. Policy outputs residual offsets (`residual_scale`). Thigh swing-forward uses negative deltas (`THIGH_DIRS = [-1,-1,-1,-1]`). |
+| `parametric` | `ParametricCPG` | Policy outputs 6 modulation values: frequency (1.5–3.0 Hz), thigh amplitude (±50%), calf amplitude (±50%), phase offset, duty cycle (0.3–0.7), and jump-boost blend. |
+| `hopf` | `HopfCPGNetwork` | 4 coupled Hopf oscillators with Kuramoto trot synchronization and per-leg foot-contact phase feedback (`k_fb`). Supports live gain adjustment via `set_gains()`. |
 
 ## Terrain & curriculum — `src/terrain/config.py`
 
-`TerrainConfig` (`mode: flat | rough | hurdle | mixed`) drives per-episode
-placement so a single XML covers many episodes:
+`TerrainConfig` manages dynamic obstacle placement across episodes without editing XML files:
 
-* **Hurdle** — `hurdle_x` resampled each reset from `hurdle_x_range = (2.5, 5.0)`,
-  box geometry (height `0.12 m`, thickness `0.08 m`, width `2.0 m`) written into
-  the `hurdle` geom after `reset_model()`.
-* **Bumps** — `bump1..bump3` x-centres jittered by `±0.25 m` and heights scaled
-  from `(0.5, 1.5)×` the XML base on `rough`/`mixed`/`hurdle`.
-* Helpers: `sample_hurdle_x()`, `sample_bump_poses()`, `sample_terrain(rng, stage)`,
-  `hurdle_geom_size()`, `hurdle_geom_pos()`.
+- **Hurdle**: X-position randomized per reset in `[2.5, 5.0] m` (height `0.12 m`, thickness `0.08 m`, width `2.0 m`).
+- **Bumps**: Positions jittered `±0.25 m`; heights scaled `0.5×–1.5×` during rough and hurdle stages.
 
-Curriculum stages used by both trainers:
+Curriculum stages:
 
-| Stage | World | Terrain mode |
-| :--- | :--- | :--- |
-| 0 | `scene.xml` | `flat` |
-| 1 | `scene_obstacles.xml` | `rough` (bumps only) |
-| 2 | `scene_obstacles.xml` | `hurdle` (bumps + hurdle) |
+| Stage | World | Terrain mode | Description |
+| :--- | :--- | :--- | :--- |
+| 0 | `scene.xml` | `flat` | Flat ground locomotion baseline |
+| 1 | `scene_obstacles.xml` | `rough` | Terrain with 3 low bumps |
+| 2 | `scene_obstacles.xml` | `hurdle` | Bumps + hurdle jump |
 
 ## Training
 
@@ -336,147 +288,96 @@ Curriculum stages used by both trainers:
 GO1_CPG_MODE=hopf ./bin/python base_ppo.py
 ```
 
-* Registers the env as `gym id 'Go1Env-v0'` (entry point is the `go1_env` callable).
-* Architecture: shared trunk `Linear(state_dim→256) → Tanh → Linear(256→256) → Tanh`,
-  then a **residual head** (12) plus, for `parametric`/`hopf`, a **mod head** (6);
-  `residual_log_std` / `mod_log_std` are learned diagonal std parameters.
-  `ActorNetwork.load_legacy_state_dict()` warm-starts 52/12 checkpoints into a
-  56/12+ actor (shared trunk + residual head only).
-* Critic: `Linear(state_dim(+priv)→256) → Tanh → 256 → Tanh → 1`;
-  `CriticNetwork.asymmetric(...)` supports the 9-dim privileged vector.
-* PPO: `RolloutBuffer(2048)`, 5 epochs, minibatch 64, `clip_epsilon=0.2`
-  (`0.15` in the jump stage), `value_coef=0.5`, `entropy_coef=0.01`
-  (`0.005` from the rough stage), grad-norm clip `0.5`, linearly decayed
-  `lr = 1e-4`, `max_training_timesteps = 6_010_000`.
-* Curriculum: stage 0 `< 1.5 M` steps (flat), stage 1 `< 3.0 M` (rough),
-  stage 2 above (hurdle). On a stage switch the env is rebuilt and reset.
-* `form_weight` schedule: `0.2` for the first 1 M steps, ramping
-  `0.2 → 1.0` between 1 M and 2 M, `1.0` afterwards.
-* Residual authority: `0.05` on flat, `0.15` on rough/hurdle (CPG modes);
-  `GO1_RESIDUAL_SCALE` applies only when `CPG_MODE=off`.
-  For `hopf`, `k_fb` is `0.1` on flat (near open-loop) and `GO1_CPG_K_FB` otherwise.
-* Resume/checkpointing: loads `ppo_checkpoint_latest.pth` if present (with
-  legacy shape fallback) and every 10 PPO updates writes both
-  `ppo_checkpoint_latest.pth` and `ppo_checkpoint_<global_step>.pth` in the repo
-  root, storing actor/critic/optimizers, `global_step`, `episode_count`,
-  `cpg_mode`, `state_dim`, `action_dim`.
-* A 200-step random-policy sanity check runs before training and asserts the
-  observation shape matches the actor input.
+- **Architecture**: Shared trunk `Linear(state_dim→256) → Tanh → Linear(256→256) → Tanh` feeding a 12-dim residual head (plus a 6-dim mod head for `parametric`/`hopf`). Critic supports symmetric (56-dim) or asymmetric (65-dim, includes privileged obs) inputs.
+- **PPO Setup**: Buffer size 2048, 5 epochs, minibatch 64, `clip_epsilon=0.2` (0.15 in hurdle stage), grad-norm clip 0.5, linear LR decay from `1e-4`.
+- **Curriculum**:
+  - Stage 0 (< 1.5M steps): Flat ground, residual scale `0.05`.
+  - Stage 1 (1.5M–3.0M steps): Rough ground, residual scale `0.15`.
+  - Stage 2 (> 3.0M steps): Hurdle terrain, residual scale `0.15`.
+  - `form_weight`: Scheduled from `0.2` (0–1M steps) to `1.0` (at 2M+ steps).
+- **Checkpoints**: Saves `ppo_checkpoint_latest.pth` and step snapshots every 10 updates. Automatically resumes from latest checkpoint if available.
+- **Sanity Check**: Runs a 200-step random policy rollout before training to verify shapes and environment stepping.
 
-> The root `ppo_checkpoint_*.pth` files were trained against the pre-fix CPG
-> (inverted thigh signs) — see `balance_walk_analysis.md` before resuming from
-> them; the recommended path is a fresh Stage-0 run.
+> [!NOTE]
+> Shipped root checkpoints (`ppo_checkpoint_*.pth`) were trained prior to the thigh sign fix (see `balance_walk_analysis.md`). Starting a fresh Stage-0 run is recommended.
 
 ### Stable-Baselines3 PPO (secondary) — `src/train.py`
 
 ```bash
-./bin/python -m src.train                # run as a module from the repo root
+./bin/python -m src.train                # run as module from repo root
 GO1_STAGE=2 ./bin/python -m src.train
 ```
 
-`src/train.py` executes at import time (no `main()` guard), so it must be run as
-a module from the repo root — `./bin/python src/train.py` cannot resolve
-`from src.go1_env import go1_env`. It builds a `VecNormalize`-wrapped
-`make_vec_env(make_go1_env, n_envs=4)` and trains `PPO("MlpPolicy")` for
-2,500,000 steps (`lr=1e-4`, `n_steps=512`, `batch_size=64`, `n_epochs=10`,
-`gamma=0.99`, `gae_lambda=0.95`, `ent_coef=0.0`, `vf_coef=0.5`,
-`max_grad_norm=0.5`). `CheckpointCallback(save_freq=15000)` with `n_envs=4`
-produces `rl_model_<env_steps>_steps.zip` every 60,000 env steps; a custom
-callback saves `latest_vecnormalize.pkl` alongside, and `final` /
-`final_vecnormalize.pkl` are written at the end. Logs go to
-`src/logs/<RUN_NAME>/` for TensorBoard (`./bin/tensorboard --logdir src/logs`).
-
-Note `RUN_NAME = "your_run_name"` and the world paths are module constants —
-edit them (or export the env vars below) before a real run. The CPG path is
-intentionally not used by this trainer (`GO1_CPG_MODE` defaults to `off`).
+- **Setup**: Trains SB3 `PPO("MlpPolicy")` with 4 parallel environments wrapped in `VecNormalize` for 2.5M timesteps.
+- **Hyperparameters**: `n_steps=512`, `batch_size=64`, `n_epochs=10`, `lr=1e-4`, `gamma=0.99`, `gae_lambda=0.95`.
+- **Checkpoints**: Saves `rl_model_<env_steps>_steps.zip` and `latest_vecnormalize.pkl` every 60k env steps to `src/checkpoints/<RUN_NAME>/`.
+- **Logging**: TensorBoard logs written to `src/logs/<RUN_NAME>/` (`./bin/tensorboard --logdir src/logs`).
+- **Notes**: Must be run with `-m src.train` from repo root. Uses `cpg_mode=off` by default.
 
 ### Environment-variable reference
 
 | Var | Used by | Default | Effect |
 | :--- | :--- | :--- | :--- |
-| `GO1_CPG_MODE` | `base_ppo.py` | `fixed_residual` | `off` \| `fixed_residual` \| `parametric` \| `hopf` |
-| `GO1_RESIDUAL_SCALE` | `base_ppo.py` | `0.10` | Residual scale, **only** when `CPG_MODE=off` |
+| `GO1_CPG_MODE` | `base_ppo.py`, `src/train.py` | `fixed_residual` (`off` for SB3) | CPG mode: `off`, `fixed_residual`, `parametric`, or `hopf` |
+| `GO1_RESIDUAL_SCALE` | `base_ppo.py` | `0.10` | Action residual scale (only when `CPG_MODE=off`) |
 | `GO1_CPG_K_FB` | `base_ppo.py` | `0.5` | Hopf foot-contact feedback gain (stages ≥ 1) |
-| `GO1_CPG_COUPLING` | `base_ppo.py` | `2.0` | Hopf Kuramoto coupling strength |
-| `GO1_LANDING_BONUS_W` | `base_ppo.py` | `1.0` | Weight of the landing-stability bonus |
-| `GO1_HURDLE_HIT_TERMINATE` | `base_ppo.py` | `0` | `1` ends the episode on hurdle contact |
-| `GO1_STAGE0_END` | `base_ppo.py` | `1500000` | Step where flat → rough |
-| `GO1_STAGE1_END` | `base_ppo.py` | `3000000` | Step where rough → hurdle |
-| `GO1_STAGE` | `src/train.py` | `0` | Curriculum stage 0/1/2 |
-| `GO1_CPG_MODE` | `src/train.py` | `off` | SB3 path stays CPG-off by default |
-| `GO1_FRESH_VECNORM` | `src/train.py` | `0` | `1` forces fresh `VecNormalize` stats (required for 56-dim runs) |
-| `GO1_EVAL_STAGE` | `src/eval_render.py` | `flat` | `flat` \| `hurdle` |
-| `GO1_EVAL_XML` | `src/eval_render.py` | derived | Overrides the evaluation XML |
-| `GO1_SAVE_GIF` | `src/eval_render.py` | `"0"` | ⚠️ inverted flag: unset/`"0"` **enables** GIF saving, any other value disables it |
-| `GO1_EVAL_STAGE` | `customs_eval_render.py` | `hurdle` | `flat` uses `scene.xml`, else `scene_obstacles.xml` |
+| `GO1_CPG_COUPLING` | `base_ppo.py` | `2.0` | Hopf Kuramoto inter-leg coupling strength |
+| `GO1_LANDING_BONUS_W` | `base_ppo.py` | `1.0` | Weight for landing stability bonus |
+| `GO1_HURDLE_HIT_TERMINATE` | `base_ppo.py` | `0` | Terminate episode immediately on hurdle contact (`1` to enable) |
+| `GO1_STAGE0_END` | `base_ppo.py` | `1500000` | Step threshold for flat → rough transition |
+| `GO1_STAGE1_END` | `base_ppo.py` | `3000000` | Step threshold for rough → hurdle transition |
+| `GO1_STAGE` | `src/train.py` | `0` | Curriculum stage: `0` (flat), `1` (rough), `2` (hurdle) |
+| `GO1_FRESH_VECNORM` | `src/train.py` | `0` | Force fresh `VecNormalize` stats (`1` required for 56-dim runs) |
+| `GO1_EVAL_STAGE` | Eval renderers | `hurdle` / `flat` | Target terrain for evaluation (`flat` or `hurdle`) |
+| `GO1_EVAL_XML` | `src/eval_render.py` | derived | Override evaluation XML scene path |
+| `GO1_SAVE_GIF` | `src/eval_render.py` | `"0"` | Inverted flag: `"0"`/unset enables GIF saving, any other value disables |
 
 ## Evaluation & rendering
 
-Both renderers run the env with `render_mode="human"`, so they need a display
-(`DISPLAY` is set in this workspace; MuJoCo opens its own window). Note that in
-`human` mode Gymnasium's MuJoCo `render()` returns `None`, so *no frames are
-captured* and no GIF is written — switch the env to `render_mode="rgb_array"`
-if you actually want the GIF (see [Video & GIF capture](#video--gif-capture)
-for verified recipes).
+By default, evaluation scripts use `render_mode="human"` for interactive display. To record GIFs or videos, use `render_mode="rgb_array"` (see [Video & GIF capture](#video--gif-capture)).
+
+### Evaluating Custom PPO
 
 ```bash
-# SB3 policy (expects rl_model_120000_steps.zip + latest_vecnormalize.pkl)
-./bin/python -m src.eval_render           # GO1_EVAL_STAGE=flat|hurdle
+./bin/python customs_eval_render.py       # GO1_EVAL_STAGE=hurdle (default) or flat
 ```
 
-`src/eval_render.py` disables normalization at eval time
-(`VecNormalize.training = False`, `norm_reward = False`), tracks the `trunk`
-body with the camera, runs up to 1000 steps / 20 episodes and prints
-`hit_rate`, `success_rate`, `mean_clearance`, `mean_landing_bonus`
-(plus `output_<stage>.gif` when GIF saving is on).
+- Automatically loads `ppo_checkpoint_latest.pth`, detects checkpoint dimensions (`state_dim`, `action_dim`), and infers `cpg_mode`.
+- Renders rollouts with an optional OpenCV telemetry HUD (leg swing bars, CPG phase, obstacle clearance).
+- Evaluates up to 20 episodes and logs hit rate, jump success, and mean clearance.
 
-> ⚠️ **This command currently aborts on the shipped artifacts**: the checked-in
-> SB3 `VecNormalize` stats are 49-dim while the env is 56-dim, so it raises
-> `AssertionError: spaces must have the same shape: (49,) != (56,)`. Train a
-> fresh 56-dim SB3 run first (`./bin/python -m src.train`) or repoint
-> `CHECKPOINT_DIR` at new artifacts.
+### Evaluating SB3 Baseline
 
 ```bash
-# Custom PPO policy (resolves ppo_checkpoint_latest.pth, infers dims)
-./bin/python customs_eval_render.py       # GO1_EVAL_STAGE=hurdle (default)
+./bin/python -m src.eval_render           # GO1_EVAL_STAGE=flat or hurdle
 ```
 
-`customs_eval_render.py` resolves `ppo_checkpoint_latest.pth` (falling back to
-`ppo_checkpoint_6000640.pth` and `checkpoints/`), rebuilds `ActorNetwork` from
-the checkpoint's stored `state_dim`/`action_dim` (legacy 52/12 checkpoints
-warm-start too), reads the checkpoint's own `cpg_mode`, renders up to 2000 steps
-/ 20 episodes, draws a per-leg swing-bar + `phase/boost/dist/clear` overlay when
-`cv2` is available (cv2 5.0.0 is installed here), and writes
-`gifs/go1_<stage>_<cpg_mode>_rollout.gif` at 30 fps when frames are captured.
-A verified run prints e.g. `Episodes: 1 | jump_eps: 1 hit_rate=0.00
-success_rate=0.00 mean_clearance=0.184m mean_landing_bonus=0.000` followed by
-`No frames were captured; GIF was not saved.` (the `human`-mode caveat above).
+- Disables normalization updates (`VecNormalize.training = False`) and tracks the robot trunk.
+- Evaluates up to 20 episodes and reports hurdle clearance metrics.
+
+> [!WARNING]
+> Shipped SB3 artifacts use legacy 49-dim normalization stats and will fail with a shape mismatch against the current 56-dim environment. Retrain with `./bin/python -m src.train` before running this evaluator.
 
 ## Video & GIF capture
 
-No media is committed to this repo: `gifs/` is empty and `.gitignore` excludes
-`gifs/`, `*.gif`, `*.mp4` and `*.avi` (confirmed with `git check-ignore`), so
-recordings stay local by design. To commit one anyway, force-add it:
-`git add -f gifs/go1_hurdle_fixed_residual.gif`.
+Rendered media is gitignored (`gifs/`, `*.gif`, `*.mp4`). To track a recording, use `git add -f gifs/<filename>`.
 
 ### Capture rules (all verified in this workspace)
 
-| Fact | Detail |
+| Property | Detail |
 | :--- | :--- |
-| Frame format | `480x480x3` `uint8` per control step (`dt = 0.01 s`, so 1 s of rollout = 100 frames) |
-| `render_mode="rgb_array"` | `render()` returns the array — required for any GIF/MP4 capture |
-| `render_mode="human"` | `render()` returns `None` (window only), so there is nothing to write |
-| Through `gym.make(...)` | the **first** `render()` raises `AssertionError: With no render_modes, expects the Env.render_mode to be None` because `go1_env` declares an empty `metadata["render_modes"]`; later calls pass through. `customs_eval_render.py` swallows that first assertion in its `try/except`, which is why it reports `No frames were captured` |
-| Working capture path | construct the env **directly** (`go1_env(..., render_mode="rgb_array")`) or use `env.unwrapped.render()` — both bypass the passive checker |
-| Encoders | `imageio` 2.37.3 + Pillow 12.3.0 are installed, so **GIF works**. `imageio-ffmpeg` and system `ffmpeg` are absent → MP4 needs one of them |
-| GIF weight | ~14.6 MB for 150 frames at 480x480 (verified) — keep clips short or downscale |
+| Frame format | `480x480x3 uint8` at `dt = 0.01 s` (100 fps simulation step, recorded at 30 fps) |
+| Render mode | Must use `render_mode="rgb_array"` (`render_mode="human"` opens a window and returns `None`) |
+| Instantiation | Instantiate `go1_env(..., render_mode="rgb_array")` directly or call `env.unwrapped.render()` to bypass passive checkers |
+| Dependencies | `imageio` + `Pillow` are installed for GIF encoding; MP4 requires `imageio-ffmpeg` or system `ffmpeg` |
+| File size | ~15 MB per 150 frames at 480×480; keep clips short or downsample frames |
 
 ### Recipe 1 — custom PPO policy → GIF (verified end-to-end)
 
 ```python
-# record_gif.py — run from the repo root: ./bin/python record_gif.py
+# record_gif.py — run: ./bin/python record_gif.py
 import imageio, torch
-from base_ppo import ActorNetwork            # also registers gym id Go1Env-v0
+from base_ppo import ActorNetwork
 from src.go1_env import go1_env
 from src.terrain.config import TerrainConfig
 
@@ -487,14 +388,14 @@ actor.eval()
 
 env = go1_env(
     xml_file="/home/plsh/rl_env2/mujoco_menagerie/unitree_go1/scene_obstacles.xml",
-    terrain_config=TerrainConfig(mode="hurdle"),   # or mode="flat" + scene.xml
-    cpg_mode=ckpt.get("cpg_mode", "off"),          # policy must match its CPG mode
+    terrain_config=TerrainConfig(mode="hurdle"),
+    cpg_mode=ckpt.get("cpg_mode", "off"),
     residual_scale=0.10,
-    render_mode="rgb_array",                       # frames instead of a GLFW window
+    render_mode="rgb_array",
 )
 obs, _ = env.reset()
 frames = []
-for _ in range(150):                               # 1.5 s at dt = 0.01 s
+for _ in range(150):  # 1.5 seconds at dt = 0.01 s
     with torch.no_grad():
         action, _, _ = actor(torch.tensor(obs, dtype=torch.float32).unsqueeze(0))
     obs, reward, terminated, truncated, info = env.step(action.numpy().flatten())
@@ -502,68 +403,50 @@ for _ in range(150):                               # 1.5 s at dt = 0.01 s
     if terminated or truncated:
         obs, _ = env.reset()
 env.close()
+
 imageio.mimsave("gifs/go1_hurdle_fixed_residual.gif", frames, fps=30, loop=0)
-print(len(frames), frames[0].shape, f"clearance={info['clearance_m']:.3f} m")
-# verified: 150 (480, 480, 3) -> gifs/go1_hurdle_fixed_residual.gif
+print(f"Saved {len(frames)} frames to gifs/go1_hurdle_fixed_residual.gif")
 ```
 
-Notes: pass the checkpoint's own `cpg_mode` (the actor's action head is 12-dim for
-`off`/`fixed_residual` and 18-dim for `parametric`/`hopf`); use absolute XML paths;
-`imageio.mimsave(..., fps=30, loop=0)` writes an endlessly looping GIF.
+> **Note**: `cpg_mode` must match the checkpoint (12-dim action for `off`/`fixed_residual`, 18-dim for `parametric`/`hopf`).
 
 ### Recipe 2 — SB3 policy → GIF
 
-`src/eval_render.py` already contains the writer (`imageio.get_writer(output_gif,
-fps=30)` + `append_data(eval_env.render())`); switch its env to frames and it works:
+In `src/eval_render.py`, configure the environment to return pixel arrays:
 
 ```python
-# src/eval_render.py:25 — human -> rgb_array
 eval_env = DummyVecEnv([lambda: go1_env(xml_file=EVAL_XML, render_mode="rgb_array")])
 ```
 
-Verified in isolation: `DummyVecEnv([lambda: go1_env(..., render_mode="rgb_array")]).render()`
-returns `480x480x3` `uint8`, and `imageio.get_writer(path, fps=30)` + `append_data`
-produces a GIF. This path still needs 56-dim SB3 artifacts regenerated first, since
-the shipped `VecNormalize` stats abort the script (see the warning above).
+Run `./bin/python -m src.eval_render` (requires a retrained 56-dim SB3 checkpoint).
 
 ### Recipe 3 — MP4 / longer clips
 
+Install ffmpeg support:
+
 ```bash
-pip install imageio-ffmpeg            # provides a bundled ffmpeg binary for imageio
+pip install imageio-ffmpeg
 ```
 
 ```python
-imageio.mimsave("gifs/go1_rollout.mp4", frames, fps=30, codec="libx264")  # needs imageio-ffmpeg
-frames = [f[::2, ::2] for f in frames]                                    # 240x240: ~4x smaller
-```
+# Save as H.264 MP4
+imageio.mimsave("gifs/go1_rollout.mp4", frames, fps=30, codec="libx264")
 
-SB3 also offers `VecVideoRecorder(vec_env, "gifs", video_length=..., record_video_trigger=...)`,
-which likewise shells out to ffmpeg. With a system `ffmpeg` you can instead record the
-`render_mode="human"` window: `ffmpeg -f x11grab -framerate 30 -video_size 480x480 -i :0 -t 15 gifs/rollout.mp4`.
-Neither ffmpeg route has been exercised in this workspace — GIF capture (Recipes 1-2) is
-the verified path. For annotated videos, `customs_eval_render.py:_overlay_cpg(frame, info)`
-draws per-leg swing bars plus `phase / boost / dist / clear` text with `cv2`.
+# Reduce file size via 2x downsampling (240x240)
+small_frames = [f[::2, ::2] for f in frames]
+```
 
 ## Tests
 
-`pytest` is not installed in the shipped venv, so the modules have `__main__`
-shims. Run them from the repo root with the venv interpreter:
+Run the test suite directly with the virtualenv interpreter:
 
 ```bash
-./bin/python tests/test_cpg.py            # -> 6/6 CPG tests passed
-./bin/python tests/test_obstacle_env.py   # -> 9/9 obstacle-env tests passed
+./bin/python tests/test_cpg.py            # 6 unit tests (CPG dynamics)
+./bin/python tests/test_obstacle_env.py   # 9 integration tests (Env & obstacles)
 ```
 
-`tests/test_cpg.py` covers trot antisymmetry (diagonals swap after half a
-cycle), swing-leg thigh sign regression, `params_from_action` clipping to the
-safe CPG ranges, 5 s open-loop Hopf stability (oscillation + bounded amplitudes
-+ phase locking), feedback-advances-phase, and live gain retuning.
-
-`tests/test_obstacle_env.py` covers the 56-dim default obs with neutral extras,
-the 52-dim compat flag, per-episode hurdle-x and bump randomization, jump
-`info` keys, prefix-preservation between the 52/56 obs, `landing_bonus == 0` on
-flat, the `hurdle_hit_terminate` branch, and a 200-step flat regression with
-finite rewards. If you install pytest, `python3 -m pytest tests -q` works as well.
+- **`tests/test_cpg.py`**: Verifies trot antisymmetry, swing thigh signs, parameter clamping, Hopf stability/phase locking, and contact feedback gains.
+- **`tests/test_obstacle_env.py`**: Verifies 56-dim/52-dim observations, obstacle pose randomization, jump/landing reward calculations, hurdle collision termination, and step stability.
 
 ## Artifacts & file conventions
 
@@ -572,60 +455,30 @@ finite rewards. If you install pytest, `python3 -m pytest tests -q` works as wel
 | `ppo_checkpoint_latest.pth`, `ppo_checkpoint_<step>.pth` | `base_ppo.py` | Custom PPO actor/critic/optimizer state + metadata |
 | `src/checkpoints/your_run_name/` | `src/train.py` | SB3 `rl_model_*_steps.zip`, `latest_vecnormalize.pkl`, `final*` |
 | `src/logs/your_run_name/` | `src/train.py` | TensorBoard event files |
-| `gifs/` | renderers | `<stage>` rollout GIFs (empty in git) |
+| `gifs/` | Renderers | Rollout GIFs (gitignored) |
 
-Everything above is gitignored (`*.pth`, `*.zip`, `*.pkl`, `src/logs/`, `gifs/`,
-plus the venv and caches), so the tracked tree is only code, tests and docs.
-`git ls-files` lists `.gitignore`, `README.md`, `base_ppo.py`,
-`customs_eval_render.py`, `implementation_plan.md`, `src/**` and `tests/**`;
-`balance_walk_analysis.md`, `clean_up.md` and the vendored `mujoco_menagerie/`
-are currently untracked.
+All generated artifacts (`*.pth`, `*.zip`, `*.pkl`, `src/logs/`, `gifs/`) are gitignored to keep the repository lightweight.
 
 ## Known limitations & gotchas
 
-1. **Hardcoded absolute paths** — `base_ppo.py`, `src/train.py`,
-   `src/eval_render.py` and the `go1_env` default `xml_file` assume
-   `/home/plsh/rl_env2`.
-2. **`form_weight` defaults to 0.0** — outside `base_ppo.py` the kinematic
-   penalties (trot rhythm, clearance, posture, effort) are *silently disabled*.
-   Set `env.unwrapped.form_weight` if you write your own training loop.
-3. **Stale SB3 artifacts** — the shipped `src/checkpoints/your_run_name/` files
-   are pre-obstacle (49-dim `VecNormalize` stats, 52-dim policy). `src/train.py`
-   catches the mismatch and refits fresh 56-dim stats, dropping the old
-   checkpoint (`GO1_FRESH_VECNORM=1` makes that explicit), but
-   `src/eval_render.py` loads them directly and therefore **aborts** with
-   `spaces must have the same shape: (49,) != (56,)` until a fresh SB3 run exists.
-   The custom-PPO renderer is unaffected — verified working (`customs_eval_render.py`
-   resolves the root checkpoint and infers 56/12+0 dims automatically).
-4. **Pre-fix root checkpoints** — the `ppo_checkpoint_*.pth` files were trained
-   with the inverted `THIGH_DIRS` CPG; see `balance_walk_analysis.md`.
-5. **`pytest` missing** from the venv → use the script shims above.
-6. **`GO1_SAVE_GIF` is inverted** in `src/eval_render.py` (comparison against
-   `"0"`), and GIF capture slows rendering substantially.
-7. **Renderers need a display** and, because they use `render_mode="human"`,
-   `env.render()` returns `None` — so `customs_eval_render.py` prints
-   "No frames were captured" instead of writing a GIF. Use `rgb_array` (with a
-   display or EGL/OSMesa) to capture frames; see
-   [Video & GIF capture](#video--gif-capture) for working recipes.
-8. **Hopf/parametric modes have unit-test coverage only** — no trained
-   policy is checked in for them.
-9. `mujoco_menagerie/` is a vendored clone (large, untracked) — never edit the
-   vendored `scene.xml` / `go1.xml`; add new scenes or move geoms at runtime.
+1. **Hardcoded absolute paths**: `base_ppo.py`, `src/train.py`, `src/eval_render.py`, and `go1_env` assume `/home/plsh/rl_env2`.
+2. **`form_weight` defaults to 0.0**: Kinematic penalties (trot rhythm, clearance, posture) are inactive unless `form_weight` is set by the training loop (`base_ppo.py` manages this schedule).
+3. **Stale SB3 checkpoints**: Shipped SB3 checkpoints use 49-dim observation statistics; `src/eval_render.py` will raise a shape error until fresh 56-dim models are trained via `src.train`.
+4. **Pre-fix root checkpoints**: Checkpoints at the root were trained before the thigh direction fix; start fresh from Stage 0 for optimal gait convergence (see `balance_walk_analysis.md`).
+5. **No `pytest` binary**: Run tests directly as scripts via `./bin/python tests/<test_file>.py`.
+6. **Inverted `GO1_SAVE_GIF` flag**: In `src/eval_render.py`, setting `GO1_SAVE_GIF="0"` enables GIF saving, while any other value disables it.
+7. **Headless frame capture**: Evaluation scripts default to `render_mode="human"` (returns `None`). Switch to `render_mode="rgb_array"` to save GIFs/videos.
+8. **CPG modes**: `parametric` and `hopf` modes have unit test coverage, but pre-trained checkpoints are only provided for `fixed_residual`.
+9. **Vendored assets**: Do not edit `mujoco_menagerie/` XML files directly; adjust geometry dynamically at runtime via `TerrainConfig`.
 
 ## Further reading
 
-| Doc | Contents |
+| Document | Contents |
 | :--- | :--- |
-| `implementation_plan.md` | Obstacles + staged CPG design, types, files, test gates and implementation order |
-| `balance_walk_analysis.md` | Root-cause analysis of the five compounding reward/CPG bugs and the remediation plan |
+| `implementation_plan.md` | Architecture design: obstacle handling, staged CPG integration, test specifications |
+| `balance_walk_analysis.md` | Analysis and fixes for locomotion stability and CPG joint sign alignment |
 
 ## Credits & license
 
-Robot model and scenes come from the vendored
-[MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie)
-`unitree_go1` package (BSD-3-Clause, © Unitree Robotics — see
-`mujoco_menagerie/unitree_go1/LICENSE`). Training uses
-[Gymnasium](https://gymnasium.farama.org/), [MuJoCo](https://mujoco.org/),
-[Stable-Baselines3](https://stable-baselines3.readthedocs.io/) and
-[PyTorch](https://pytorch.org/). No license file is present for the project code
-itself.
+- **Robot Model & Assets**: Vendored from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie) Unitree Go1 (BSD-3-Clause, © Unitree Robotics).
+- **Libraries**: Built with [Gymnasium](https://gymnasium.farama.org/), [MuJoCo](https://mujoco.org/), [Stable-Baselines3](https://stable-baselines3.readthedocs.io/), and [PyTorch](https://pytorch.org/).

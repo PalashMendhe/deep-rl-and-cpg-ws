@@ -41,9 +41,9 @@ logs/
 # ==========================================
 # Evaluation Visualizations & Media
 # ==========================================
-gifs/
+#gifs/
 evaluations/
-*.gif
+#*.gif
 *.mp4
 *.avi
 
