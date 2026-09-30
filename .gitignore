@@ -33,7 +33,7 @@ ci_artifacts/
 checkpoints/
 src/checkpoints/
 models/
-
+flat_checkpoints/
 # ==========================================
 # Logs & TensorBoard
 # ==========================================
@@ -59,3 +59,10 @@ evaluations/
 *.swp
 *.swo
 .DS_Store
+
+# ==========================================
+# Miscellaneous
+# ==========================================
+markdowns/implementation_plan.md
+markdowns/update.md
+markdowns/clean_up.md

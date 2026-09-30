@@ -1,0 +1,35 @@
+{
+  "sac": {
+    "total_steps": 2999702,
+    "total_episodes": 4007,
+    "max_return": 2918.911865234375,
+    "mean_return": 1841.455517854258,
+    "final_100_mean_return": 1041.24597864151,
+    "stage_0_mean_return": 2275.5470362576166,
+    "stage_1_mean_return": 1620.1582725991666,
+    "stage_2_mean_return": 1691.1881707610423,
+    "peak_eval_reward": 2917.706787109375,
+    "steps_to_return_2000": 124017,
+    "steps_to_return_2500": 272676
+  },
+  "ppo": {
+    "total_steps_raw": 13492310,
+    "total_steps_scaled": 2998291,
+    "total_episodes": 9651,
+    "max_return": 2824.63102436987,
+    "mean_return": 304.5983680436776,
+    "final_100_mean_return": 1352.4840799333144,
+    "stage_0_mean_return": 323.5354547977304,
+    "stage_1_mean_return": 273.8824233079017,
+    "stage_2_mean_return": 1531.3139033785276,
+    "steps_to_return_2000_raw": 143974,
+    "steps_to_return_2500_raw": null,
+    "steps_to_return_2000_scaled": 145448,
+    "steps_to_return_2500_scaled": null
+  },
+  "comparison": {
+    "step_scale_factor_ppo_to_sac": 0.2222222222222222,
+    "sample_efficiency_ratio_at_2000": 1.1609214865703896,
+    "sample_efficiency_ratio_at_2500": null
+  }
+}

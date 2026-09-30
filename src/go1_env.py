@@ -19,15 +19,19 @@ from scipy.spatial.transform import Rotation as R
 
 import os
 import mujoco
+import gymnasium as gym
 from src.terrain.config import TerrainConfig
 from typing import NamedTuple
 
-_DEFAULT_XML_PATH = os.path.join(
+_MENAGERIE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "mujoco_menagerie",
     "unitree_go1",
-    "scene.xml",
 )
+_DEFAULT_XML_PATH = os.path.join(_MENAGERIE_DIR, "scene.xml")
+_OBSTACLES_XML_PATH = os.path.join(_MENAGERIE_DIR, "scene_obstacles.xml")
+_HURDLE_FLAT_XML_PATH = os.path.join(_MENAGERIE_DIR, "scene_hurdle_flat.xml")
+_HURDLE_XML_PATH = os.path.join(_MENAGERIE_DIR, "scene_hurdle.xml")
 
 
 class JumpEvent(NamedTuple):
@@ -105,7 +109,10 @@ class go1_env(MujocoEnv, utils.EzPickle):
       self._contact_force = contact_force
       self._contact_force_range = contact_force_range
       self._terminate_when_unhealthy = terminate_when_unhealthy
-      self._healthy_z_range = healthy_z_range
+      if healthy_z_range == (0.25, 0.45) or healthy_z_range is None:
+          self._healthy_z_range = (0.25, 0.70) if (terrain_config and terrain_config.mode in ("hurdle", "mixed")) else (0.25, 0.45)
+      else:
+          self._healthy_z_range = healthy_z_range
       self._exclude_current_position_from_observation = exclude_current_position_from_observation
       self._reset_noise_scale = reset_noise_scale
       self._target_velocity = target_velocity
@@ -239,8 +246,8 @@ class go1_env(MujocoEnv, utils.EzPickle):
 
     def _has_hurdle_geom(self):
       try:
-          mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "hurdle")
-          return True
+          gid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "hurdle")
+          return gid >= 0
       except Exception:
           return False
 
@@ -268,13 +275,13 @@ class go1_env(MujocoEnv, utils.EzPickle):
       return np.concatenate((self._get_ext_obs(), contacts, np.array([trunk_z], dtype=np.float64)))
 
     def _reposition_bumps(self):
-      """Per-episode bump variety for rough/mixed stages (Step 5).
+      """Per-episode bump variety for rough/mixed/hurdle_flat stages (Step 5).
 
       Jitters each bump's x-centre and scales its height via
       TerrainConfig.sample_bump_poses. No-op when the geoms are absent
-      (flat scene) or the terrain mode has no bumps.
+      (flat/hurdle scene) or the terrain mode has no bumps.
       """
-      if self._terrain.mode not in ("rough", "mixed", "hurdle"):
+      if self._terrain.mode not in ("rough", "mixed", "hurdle", "hurdle_flat"):
           return
       try:
           poses = self._terrain.sample_bump_poses(self.np_random)
@@ -284,6 +291,8 @@ class go1_env(MujocoEnv, utils.EzPickle):
           try:
               gid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, name)
           except Exception:
+              continue
+          if gid < 0:
               continue
           size = np.array(self.model.geom_size[gid], dtype=np.float64)
           # XML bumps are boxes centred at z=size[2]; scale z half-extent so
@@ -302,6 +311,8 @@ class go1_env(MujocoEnv, utils.EzPickle):
           hurdle_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "hurdle")
       except Exception:
           return
+      if hurdle_id < 0:
+          return
       size = self._terrain.hurdle_geom_size()
       pos = self._terrain.hurdle_geom_pos(self._hurdle_x)
       self.model.geom_size[hurdle_id] = np.array(size)
@@ -311,6 +322,8 @@ class go1_env(MujocoEnv, utils.EzPickle):
       try:
           hurdle_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "hurdle")
       except Exception:
+          return False
+      if hurdle_id < 0:
           return False
       for i in range(self.data.ncon):
           con = self.data.contact[i]
@@ -433,12 +446,35 @@ class go1_env(MujocoEnv, utils.EzPickle):
         leg_joint_velocities = self.data.qvel[6:]
         joint_vel_penalty = 0.0005 * np.sum(np.square(leg_joint_velocities))
 
+        # --- JUMP AWARENESS & KINEMATICS ---
+        hurdle_active = self._has_hurdle_geom() and self._terrain.mode in ("hurdle", "mixed")
+        trunk_z = float(self.data.qpos[2])
+        vz = float(self.data.qvel[2])
+        trunk_x = float(xy_position_after[0])
+        dist_to_hurdle = float(self._hurdle_x - trunk_x) if hurdle_active else 10.0
+        clearance_m = float(trunk_z - self._terrain.hurdle_top_z)
+        contacts_now = self._get_foot_contacts()
+        airborne = bool(hurdle_active and not bool(np.any(contacts_now)))
+
+        # Mask out gait and posture penalties when airborne or in the takeoff approach zone
+        jumping_zone = bool(hurdle_active and (0.0 < dist_to_hurdle < 0.85 or airborne))
+
+        if jumping_zone:
+            # Allow all 4 feet off ground without trot penalty, and allow pitch for takeoff
+            active_trot_penalty = 0.0
+            active_clearance_penalty = 0.0
+            active_posture_penalty = 0.5 * (roll ** 2)  # Pitch is required to leap; only lightly penalize roll
+        else:
+            active_trot_penalty = 2.0 * trot_penalty_flag
+            active_clearance_penalty = clearance_penalty
+            active_posture_penalty = posture_penalty
+
         # E. Calculate Raw Kinematic Penalty (Must be summed before scaling)
         raw_kinematic_penalty = (
-            (2.0 * trot_penalty_flag) 
-            + clearance_penalty 
-            + posture_penalty 
-            + effort_penalty 
+            active_trot_penalty
+            + active_clearance_penalty
+            + active_posture_penalty
+            + effort_penalty
             + joint_vel_penalty
         )
 
@@ -447,22 +483,15 @@ class go1_env(MujocoEnv, utils.EzPickle):
         scaled_kinematic_penalty = raw_kinematic_penalty * current_form_weight
 
         # --- 4. JUMP PACKAGE (hurdle / mixed terrain only) ---
-        hurdle_active = self._has_hurdle_geom() and self._terrain.mode in ("hurdle", "mixed")
-        trunk_z = float(self.data.qpos[2])
-        vz = float(self.data.qvel[2])
-        trunk_x = float(xy_position_after[0])
-        dist_to_hurdle = float(self._hurdle_x - trunk_x)
-        clearance_m = float(trunk_z - self._terrain.hurdle_top_z)
         hurdle_hit = bool(hurdle_active and self.check_hurdle_collision())
+        hurdle_penalty = 0.0
         if hurdle_hit:
             self._hurdle_hit_latched = True
-        contacts_now = self._get_foot_contacts()
-        airborne = bool(hurdle_active and not bool(np.any(contacts_now)))
+            hurdle_penalty = self._hurdle_hit_penalty
         approaching = bool(hurdle_active and 0.0 < dist_to_hurdle < 1.0)
         approach_bonus = float(np.clip(vz, 0.0, 1.5) * local_x_vel) if approaching else 0.0
         airtime_bonus = float(np.clip(vz, 0.0, 1.5) + max(0.0, clearance_m)) if airborne else 0.0
         jump_bonus = approach_bonus + airtime_bonus
-        hurdle_penalty = self._hurdle_hit_penalty if hurdle_hit else 0.0
         crossed = bool(hurdle_active and dist_to_hurdle < -0.3)
         jump_success = bool(crossed and not self._hurdle_hit_latched)
         # Step-6 landing-stability bonus: on first touchdown after a clean
@@ -549,3 +578,59 @@ class go1_env(MujocoEnv, utils.EzPickle):
         self.truncated = False
 
         return observation, reward, terminated, False, info_dict
+
+
+# --- Specialized Environment Classes ---
+
+
+class hurdle_flat(go1_env):
+    """Go1 environment with the three bump boxes only (no hurdle box)."""
+
+    def __init__(self, xml_file=_HURDLE_FLAT_XML_PATH, terrain_config=None, **kwargs):
+        if terrain_config is None:
+            terrain_config = TerrainConfig(mode="hurdle_flat")
+        super().__init__(xml_file=xml_file, terrain_config=terrain_config, **kwargs)
+
+
+class hurdle(go1_env):
+    """Go1 environment with the larger hurdle box only (no bump boxes)."""
+
+    def __init__(self, xml_file=_HURDLE_XML_PATH, terrain_config=None, **kwargs):
+        if terrain_config is None:
+            terrain_config = TerrainConfig(mode="hurdle")
+        super().__init__(xml_file=xml_file, terrain_config=terrain_config, **kwargs)
+
+
+# Convenience aliases
+HurdleFlatEnv = hurdle_flat
+hurdle_flat_env = hurdle_flat
+HurdleEnv = hurdle
+hurdle_env = hurdle
+
+
+# --- Gymnasium Registration ---
+def _make_hurdle_flat(**kwargs):
+    return hurdle_flat(**kwargs)
+
+
+def _make_hurdle(**kwargs):
+    return hurdle(**kwargs)
+
+
+def _make_go1_env(**kwargs):
+    return go1_env(**kwargs)
+
+
+for _id, _ep in [
+    ("hurdle_flat", _make_hurdle_flat),
+    ("hurdle_flat-v0", _make_hurdle_flat),
+    ("Go1HurdleFlat-v0", _make_hurdle_flat),
+    ("hurdle", _make_hurdle),
+    ("hurdle-v0", _make_hurdle),
+    ("Go1Hurdle-v0", _make_hurdle),
+    ("Go1Env-v0", _make_go1_env),
+]:
+    try:
+        gym.register(id=_id, entry_point=_ep)
+    except Exception:
+        pass

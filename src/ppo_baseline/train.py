@@ -1,19 +1,20 @@
-''' 
-This model is trained on google colab, so there may be some dependencies that are not installed in your local environment.
-And there might be some things that are not compatible with your local environment and you want to change it.
-'''
-
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import VecNormalize
 import os
+import sys
+
+# Repository path configuration (3 levels up from src/ppo_baseline/train.py)
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
 from src.go1_env import go1_env
 from src.terrain.config import TerrainConfig
 
 RUN_NAME = "your_run_name"  # Replace with your desired run name
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHECKPOINT_DIR = os.path.join(REPO_ROOT, "src", "checkpoints", RUN_NAME)
 LOG_DIR = os.path.join(REPO_ROOT, "src", "logs", RUN_NAME)
 FLAT_XML = os.path.join(REPO_ROOT, "mujoco_menagerie", "unitree_go1", "scene.xml")

@@ -11,20 +11,35 @@ try:
 except Exception:
     cv2 = None
 
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-gif_dir = os.path.expanduser("~/rl_env2/gifs")
-if ROOT_DIR not in sys.path:
-    sys.path.insert(0, ROOT_DIR)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
+gif_dir = os.path.join(REPO_ROOT, "gifs")
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
 
-from base_ppo import ActorNetwork, CHECKPOINT_PATH
+from src.ppo_baseline.base_ppo import ActorNetwork, CHECKPOINT_PATH
 
 
 def resolve_checkpoint_path():
+    env_path = os.environ.get("GO1_CHECKPOINT_PATH", None)
+    if env_path:
+        if os.path.exists(env_path):
+            return env_path
+        if os.path.exists(os.path.join(REPO_ROOT, env_path)):
+            return os.path.join(REPO_ROOT, env_path)
+        if os.path.exists(os.path.join(SCRIPT_DIR, env_path)):
+            return os.path.join(SCRIPT_DIR, env_path)
+
     candidates = [
+        os.path.join(REPO_ROOT, "ppo_checkpoint_latest.pth"),
         CHECKPOINT_PATH,  # same file base_ppo.py writes -> no path drift
-        os.path.join(ROOT_DIR, "ppo_checkpoint_6000640.pth"),
-        os.path.join(ROOT_DIR, "checkpoints", "ppo_checkpoint_latest.pth"),
-        os.path.join(ROOT_DIR, "checkpoints", "ppo_checkpoint_6000640.pth"),
+        os.path.join(REPO_ROOT, "ppo_checkpoint_6000640.pth"),
+        os.path.join(REPO_ROOT, "checkpoints", "ppo_checkpoint_latest.pth"),
+        os.path.join(REPO_ROOT, "checkpoints", "ppo_checkpoint_6000640.pth"),
+        os.path.join(SCRIPT_DIR, "ppo_checkpoint_latest.pth"),
+        os.path.join(os.getcwd(), "ppo_checkpoint_latest.pth"),
         os.path.join(os.getcwd(), "ppo_checkpoint_6000640.pth"),
     ]
     for path in candidates:
@@ -75,21 +90,50 @@ except RuntimeError as exc:
 actor.eval()
 
 STAGE = os.environ.get("GO1_EVAL_STAGE", "hurdle")
-EVAL_XML = os.path.join(ROOT_DIR, "mujoco_menagerie", "unitree_go1",
-                        "scene_obstacles.xml")
-if STAGE == "flat" or not os.path.exists(EVAL_XML):
-    EVAL_XML = os.path.join(ROOT_DIR, "mujoco_menagerie", "unitree_go1", "scene.xml")
+from src.terrain.config import TerrainConfig
+
+MENAGERIE_DIR = os.path.join(REPO_ROOT, "mujoco_menagerie", "unitree_go1")
+
+if STAGE == "flat":
+    EVAL_XML = os.path.join(MENAGERIE_DIR, "scene.xml")
+    terrain = TerrainConfig(mode="flat")
+elif STAGE in ("hurdle_flat", "rough"):
+    EVAL_XML = os.path.join(MENAGERIE_DIR, "scene_hurdle_flat.xml")
+    terrain = TerrainConfig(mode="hurdle_flat")
+elif STAGE == "hurdle": 
+    EVAL_XML = os.path.join(MENAGERIE_DIR, "scene_hurdle.xml")
+    terrain = TerrainConfig(mode="hurdle")
+else:
+    EVAL_XML = os.path.join(MENAGERIE_DIR, "scene_obstacles.xml")
+    terrain = TerrainConfig(mode="mixed")
+
+if not os.path.exists(EVAL_XML):
+    EVAL_XML = os.path.join(MENAGERIE_DIR, "scene.xml")
+
 cpg_mode = checkpoint.get("cpg_mode", "off") if isinstance(checkpoint, dict) else "off"
 print(f"Eval: stage={STAGE} xml={os.path.basename(EVAL_XML)} cpg_mode={cpg_mode} "
       f"actor=({state_dim},{residual_dim}+{mod_dim})")
 
-env = gym.make("Go1Env-v0", xml_file=EVAL_XML, cpg_mode=cpg_mode,
-               residual_scale=0.10, render_mode="human")  # Use "human" for live rendering, "rgb_array" for GIF capture.
+render_mode_env = os.environ.get("GO1_RENDER_MODE", "rgb_array")
+is_human = (render_mode_env == "human")
+viewer_backend = os.environ.get("GO1_VIEWER", "opencv").lower()
+speed = float(os.environ.get("GO1_SPEED", "1.0"))
+target_step_dt = 0.02 / max(0.1, speed)  # 50 Hz base physics step
+
+# Use offscreen rgb_array under the hood for opencv viewer to avoid Wayland/GLFW crashes
+internal_render_mode = "rgb_array" if (is_human and viewer_backend == "opencv") else render_mode_env
+
+env = gym.make("Go1Env-v0", xml_file=EVAL_XML, terrain_config=terrain, cpg_mode=cpg_mode,
+               residual_scale=0.10, render_mode=internal_render_mode)
 state, _ = env.reset()
 assert state.shape == (state_dim,), f"obs {state.shape} != actor ({state_dim},)"
 
+if is_human:
+    print(f"Realtime Mode: Enabled ({speed:.1f}x speed, viewer: {viewer_backend.upper()})")
+    print("Controls: Press 'q' or 'ESC' in the simulation window to exit.")
+
 frames = []
-gif_dir = os.path.join(ROOT_DIR, "gifs")
+gif_dir = os.path.join(REPO_ROOT, "gifs")
 os.makedirs(gif_dir, exist_ok=True)
 gif_path = os.path.join(gif_dir, f"go1_{STAGE}_{cpg_mode}_rollout.gif")
 # Ensure the renderer/viewer is initialized before touching camera params.
@@ -173,7 +217,9 @@ def _overlay_cpg(frame, info):
         return frame
 
 
-for _ in range(2000):
+user_exited = False
+for step_idx in range(2000):
+    step_t0 = time.time()
     state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
     with torch.no_grad():
         action, _, _ = actor(state_tensor)
@@ -184,12 +230,29 @@ for _ in range(2000):
     try:
         frame = env.render()
         if frame is not None:
-            if isinstance(frame, np.ndarray):
-                frames.append(_overlay_cpg(frame.astype(np.uint8), info))
-            else:
-                frames.append(_overlay_cpg(np.asarray(frame, dtype=np.uint8), info))
+            raw_frame = frame if isinstance(frame, np.ndarray) else np.asarray(frame)
+            annotated = _overlay_cpg(raw_frame.astype(np.uint8), info)
+            frames.append(annotated)
+
+            if is_human and viewer_backend == "opencv" and cv2 is not None:
+                bgr = cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR)
+                cv2.imshow(f"Go1 PPO Simulation ({STAGE.upper()})", bgr)
+                elapsed = time.time() - step_t0
+                wait_ms = max(1, int((target_step_dt - elapsed) * 1000))
+                key = cv2.waitKey(wait_ms) & 0xFF
+                if key in (27, ord('q')):
+                    print("\nUser pressed exit key. Stopping simulation.")
+                    user_exited = True
+                    break
+            elif is_human and viewer_backend == "mujoco":
+                elapsed = time.time() - step_t0
+                if target_step_dt > elapsed:
+                    time.sleep(target_step_dt - elapsed)
     except Exception as exc:
         print(f"Render skipped: {exc}")
+
+    if user_exited:
+        break
 
     if terminated or truncated:
         episodes += 1
@@ -203,11 +266,17 @@ for _ in range(2000):
         if episodes >= 20:
             break
 
-print(f"Episodes: {episodes} | jump_eps: {jump_episodes} "
+print(f"\nEpisodes: {episodes} | jump_eps: {jump_episodes} "
       f"hit_rate={jump_hits/max(1,jump_episodes):.2f} "
       f"success_rate={jump_successes/max(1,jump_episodes):.2f} "
       f"mean_clearance={float(np.mean(clearances)) if clearances else 0.0:.3f}m "
       f"mean_landing_bonus={jump_landings/max(1,jump_episodes):.3f}")
+
+if is_human and cv2 is not None:
+    try:
+        cv2.destroyAllWindows()
+    except Exception:
+        pass
 
 if frames:
     imageio.mimsave(gif_path, frames, fps=30, loop=0)

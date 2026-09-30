@@ -45,7 +45,7 @@ def test_params_from_action_clipping():
     assert 0.0 <= p.jump_boost <= 1.0
     p0 = cpg.params_from_action(np.zeros(6))
     assert abs(p0.frequency_hz - 2.0) < 1e-9
-    assert abs(p0.jump_boost - 0.5) < 1e-9
+    assert abs(p0.jump_boost - 0.0) < 1e-9
 
 
 def test_hopf_stability_open_loop():

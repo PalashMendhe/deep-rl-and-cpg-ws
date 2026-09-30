@@ -10,7 +10,7 @@ from typing import Tuple
 
 @dataclass
 class TerrainConfig:
-    mode: str = "hurdle"  # flat | rough | hurdle | mixed
+    mode: str = "hurdle"  # flat | rough | hurdle_flat | hurdle | mixed
     rough_seed: int = 0
     rough_amplitude_m: float = 0.02
     rough_length_m: float = 0.4
@@ -19,7 +19,7 @@ class TerrainConfig:
     hurdle_thickness_m: float = 0.08
     hurdle_width_m: float = 2.0
     randomize_hurdle_x: bool = True
-    hurdle_x_range: Tuple[float, float] = (2.5, 5.0)
+    hurdle_x_range: Tuple[float, float] = (2.5, 4.0)
     bump_names: Tuple[str, ...] = ("bump1", "bump2", "bump3")
     # Rough-stage bump variety (Step 5). Base x-centres match scene_obstacles.xml;
     # each reset jitters them inside ±bump_jitter_m and scales height by a factor
@@ -42,6 +42,8 @@ class TerrainConfig:
         Returns a list of (name, x, height_scale). When randomize_bumps is
         False the XML defaults are returned (scale 1.0).
         """
+        if self.mode in ("flat",):
+            return []
         out = []
         for i, name in enumerate(self.bump_names):
             base_x = float(self.bump_base_x[i]) if i < len(self.bump_base_x) else float(1.0 + 0.5 * i)
@@ -58,16 +60,16 @@ class TerrainConfig:
         """Plan Step-5 helper: map curriculum stage -> (mode, hurdle_x, bumps).
 
         stage 0 -> flat (no obstacles), 1 -> rough (bumps only),
-        2 -> hurdle (bumps + hurdle). Returns a dict so training-loop code
+        2 -> hurdle (hurdle only / hurdle + bumps). Returns a dict so training-loop code
         can stay readable without touching MuJoCo internals.
         """
         if stage <= 0:
             return {"mode": "flat", "hurdle_x": None, "bumps": []}
         if stage == 1:
-            return {"mode": "rough", "hurdle_x": None,
+            return {"mode": "hurdle_flat", "hurdle_x": None,
                     "bumps": self.sample_bump_poses(rng)}
         return {"mode": "hurdle", "hurdle_x": self.sample_hurdle_x(rng),
-                "bumps": self.sample_bump_poses(rng)}
+                "bumps": self.sample_bump_poses(rng) if self.mode != "hurdle" else []}
 
     @property
     def hurdle_top_z(self) -> float:

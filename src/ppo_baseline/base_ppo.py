@@ -3,6 +3,13 @@ import torch
 import numpy as np
 import torch.optim as optim
 import os
+import sys
+
+# Repository path configuration (3 levels up from src/ppo_baseline/base_ppo.py)
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
 from torch.distributions import Normal
 import gymnasium as gym
 
@@ -33,9 +40,11 @@ STATE_DIM = 56          # 52 proprio + 4 hurdle-relative extras
 RESIDUAL_DIM = 12
 MOD_DIM = 6 if CPG_MODE in ("parametric", "hopf") else 0
 ACTION_DIM = RESIDUAL_DIM + MOD_DIM  # 12 for off/fixed, 18 for parametric/hopf
-REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
-FLAT_XML = os.path.join(REPO_ROOT, "mujoco_menagerie", "unitree_go1", "scene.xml")
-OBSTACLE_XML = os.path.join(REPO_ROOT, "mujoco_menagerie", "unitree_go1", "scene_obstacles.xml")
+MENAGERIE_DIR = os.path.join(REPO_ROOT, "mujoco_menagerie", "unitree_go1")
+FLAT_XML = os.path.join(MENAGERIE_DIR, "scene.xml")
+OBSTACLE_XML = os.path.join(MENAGERIE_DIR, "scene_obstacles.xml")
+HURDLE_FLAT_XML = os.path.join(MENAGERIE_DIR, "scene_hurdle_flat.xml")
+HURDLE_XML = os.path.join(MENAGERIE_DIR, "scene_hurdle.xml")
 STAGE0_END = int(os.environ.get("GO1_STAGE0_END", "1500000"))  # flat
 STAGE1_END = int(os.environ.get("GO1_STAGE1_END", "3000000"))  # rough
 
@@ -70,20 +79,28 @@ def build_env(stage):
                         hurdle_hit_terminate=HURDLE_HIT_TERMINATE,
                         **cpg_kwargs)
     if stage == 1:
-        return gym.make('Go1Env-v0', xml_file=OBSTACLE_XML,
-                        terrain_config=TerrainConfig(mode="rough"),
+        stage1_mode = os.environ.get("GO1_STAGE1_MODE", "hurdle_flat" if os.path.exists(HURDLE_FLAT_XML) else "rough")
+        if stage1_mode == "hurdle":
+            stage1_xml = HURDLE_XML if os.path.exists(HURDLE_XML) else OBSTACLE_XML
+        elif stage1_mode == "hurdle_flat":
+            stage1_xml = HURDLE_FLAT_XML if os.path.exists(HURDLE_FLAT_XML) else OBSTACLE_XML
+        else:
+            stage1_xml = OBSTACLE_XML
+        return gym.make('Go1Env-v0', xml_file=stage1_xml,
+                        terrain_config=TerrainConfig(mode=stage1_mode),
                         cpg_mode=CPG_MODE, residual_scale=residual_scale,
                         landing_bonus_w=LANDING_BONUS_W,
                         hurdle_hit_terminate=HURDLE_HIT_TERMINATE,
                         **cpg_kwargs)
-    return gym.make('Go1Env-v0', xml_file=OBSTACLE_XML,
+    stage2_xml = HURDLE_XML if os.path.exists(HURDLE_XML) else OBSTACLE_XML
+    return gym.make('Go1Env-v0', xml_file=stage2_xml,
                     terrain_config=TerrainConfig(mode="hurdle"),
                     cpg_mode=CPG_MODE, residual_scale=residual_scale,
                     landing_bonus_w=LANDING_BONUS_W,
                     hurdle_hit_terminate=HURDLE_HIT_TERMINATE,
                     **cpg_kwargs)
 
-CHECKPOINT_DIR = os.path.dirname(os.path.abspath(__file__))
+CHECKPOINT_DIR = os.environ.get("GO1_CHECKPOINT_DIR", REPO_ROOT)
 CHECKPOINT_PATH = os.path.join(CHECKPOINT_DIR, "ppo_checkpoint_latest.pth")
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
@@ -302,9 +319,19 @@ class PPOAgent:
                 critic_optimizer.step()  
 
 def resolve_checkpoint_path():
+    # Priority 1: Environment variable override
+    env_path = os.environ.get("GO1_CHECKPOINT_PATH", None)
+    if env_path and env_path.lower() in ("none", "fresh", "scratch", "new"):
+        return None
+    if env_path and os.path.exists(env_path):
+        return env_path
+
     candidate_dirs = []
     script_dir = os.path.dirname(os.path.abspath(__file__))
     candidate_dirs.extend([
+        REPO_ROOT,
+        os.path.join(REPO_ROOT, "checkpoints"),
+        os.path.join(REPO_ROOT, "flat_checkpoints"),
         script_dir,
         os.path.join(script_dir, "checkpoints"),
         os.getcwd(),
@@ -348,12 +375,15 @@ def main():
     agent = PPOAgent()
     state_dim = STATE_DIM
     action_dim = ACTION_DIM
-    max_training_timesteps = 6010000
+    STAGE_START_STEP = int(os.environ.get("GO1_STAGE_START_STEP", "0"))
+    TARGET_MAX_STEPS = int(os.environ.get("GO1_MAX_STEPS", "12000000"))
+    LR_BASE = float(os.environ.get("GO1_LR_BASE", "1e-4"))
+    max_training_timesteps = TARGET_MAX_STEPS
     buffer_size = 2048
     actor = ActorNetwork(state_dim, RESIDUAL_DIM, MOD_DIM)
     critic = CriticNetwork(state_dim)
-    actor_optimizer = optim.Adam(actor.parameters(), lr=1e-4)
-    critic_optimizer = optim.Adam(critic.parameters(), lr=1e-4)
+    actor_optimizer = optim.Adam(actor.parameters(), lr=LR_BASE)
+    critic_optimizer = optim.Adam(critic.parameters(), lr=LR_BASE)
     buffer = RolloutBuffer(buffer_size=buffer_size, state_dim=state_dim, action_dim=action_dim)
     checkpoint_interval = 10
     update_count = 0
@@ -397,8 +427,25 @@ def main():
                 critic.load_state_dict(checkpoint['critic_state_dict'])
             except RuntimeError:
                 print("Critic shape mismatch too; keeping fresh critic.")
-        actor_optimizer.load_state_dict(checkpoint['actor_optimizer_state_dict'])
-        critic_optimizer.load_state_dict(checkpoint['critic_optimizer_state_dict'])
+        try:
+            actor_optimizer.load_state_dict(checkpoint['actor_optimizer_state_dict'])
+        except (ValueError, KeyError) as exc:
+            print(f"Optimizer parameter group mismatch ({exc}). Initializing fresh Adam optimizer for expanded action space.")
+            actor_optimizer = optim.Adam(actor.parameters(), lr=LR_BASE)
+        try:
+            critic_optimizer.load_state_dict(checkpoint['critic_optimizer_state_dict'])
+        except (ValueError, KeyError) as exc:
+            print(f"Critic optimizer parameter group mismatch ({exc}). Initializing fresh Adam optimizer.")
+            critic_optimizer = optim.Adam(critic.parameters(), lr=LR_BASE)
+
+        RESET_EXPLORATION = os.environ.get("GO1_RESET_EXPLORATION", "0") == "1"
+        if RESET_EXPLORATION:
+            with torch.no_grad():
+                actor.residual_log_std.clamp_(min=-0.7)  # sigma >= 0.5 rad
+                if actor.mod_log_std is not None:
+                    actor.mod_log_std.fill_(0.0)        # sigma = 1.0 for modulation
+            print("Exploration noise re-inflated (residual_log_std clamped >= -0.7, mod_log_std = 0.0)")
+
         global_step = checkpoint['global_step']
         episode_count = checkpoint.get('episode_count', 0)
         stage = stage_for_step(global_step)
@@ -456,7 +503,7 @@ def main():
                     episode_length = global_step - prev_step
                     print(f"Episode Length: {episode_length} steps")
                     print(f"velocity_reward: {info['velocity_reward']:.4f}, smoothness_penalty: {info['action_smoothness_penalty']:.4f}")
-                    if stage == 2:
+                    if stage >= 1 and 'hurdle_hit' in info:
                         jump_episodes += 1
                         jump_hits += int(bool(info.get('hurdle_hit', False)))
                         jump_successes += int(bool(info.get('jump_success', False)))
@@ -473,8 +520,9 @@ def main():
                     with torch.no_grad():
                         last_value = critic(torch.tensor(next_state, dtype=torch.float32).unsqueeze(0)).item()
                 # Calculate the remaining fraction of training
-                frac = 1.0 - (global_step - 1.0) / max_training_timesteps
-                lr_now = 1e-4 * max(frac, 0.0) # Prevents negative learning rates if you overshoot
+                progress = (global_step - STAGE_START_STEP) / max(1, TARGET_MAX_STEPS - STAGE_START_STEP)
+                frac = max(0.05, 1.0 - progress)  # Floor at 5% LR
+                lr_now = LR_BASE * frac
 
                 # Apply the decayed learning rate to both optimizers
                 for param_group in actor_optimizer.param_groups:
@@ -501,7 +549,7 @@ def main():
                 'action_dim': action_dim,
                 }
             torch.save(checkpoint, CHECKPOINT_PATH)
-            torch.save(checkpoint, f"ppo_checkpoint_{global_step}.pth")
+            torch.save(checkpoint, os.path.join(CHECKPOINT_DIR, f"ppo_checkpoint_{global_step}.pth"))
 
 if __name__ == "__main__": 
     main()
