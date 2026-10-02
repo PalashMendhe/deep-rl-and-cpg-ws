@@ -1,6 +1,6 @@
-"""Simulation and Rollout Renderer for SAC Policy on Unitree Go1.
+"""Simulation and Rollout Renderer for TD3 Policy on Unitree Go1.
 
-Supports all curriculum stages (flat, hurdle_flat / flat_hurdle, hurdle),
+Supports all curriculum stages (flat, hurdle_flat / rough, hurdle),
 tracks real-time locomotion metrics, and generates annotated rollout GIFs
 with CPG phase and leg state overlays.
 """
@@ -36,7 +36,7 @@ if REPO_ROOT not in sys.path:
 
 from src.go1_env import go1_env
 from src.terrain.config import TerrainConfig
-from src.sac_baseline.sac_agent import SACAgent
+from src.td3_baseline.td3_agent import TD3Agent
 
 MENAGERIE_DIR = os.path.join(REPO_ROOT, "mujoco_menagerie", "unitree_go1")
 FLAT_XML = os.path.join(MENAGERIE_DIR, "scene.xml")
@@ -64,20 +64,20 @@ def resolve_stage_config(stage_str: str):
 
 
 def resolve_checkpoint(ckpt_arg=None):
-    """Find best or latest SAC checkpoint."""
+    """Find best or latest TD3 checkpoint."""
     if ckpt_arg and os.path.exists(ckpt_arg):
         return ckpt_arg
 
     candidates = [
-        os.path.join(REPO_ROOT, "src", "sac_baseline", "checkpoints", "sac_go1_curriculum", "best_checkpoint.pth"),
-        os.path.join(REPO_ROOT, "src", "sac_baseline", "checkpoints", "best_checkpoint.pth"),
-        os.path.join(REPO_ROOT, "src", "sac_baseline", "checkpoints", "sac_go1_curriculum", "latest_checkpoint.pth"),
-        os.path.join(REPO_ROOT, "src", "sac_baseline", "checkpoints", "latest_checkpoint.pth"),
+        os.path.join(REPO_ROOT, "src", "td3_baseline", "checkpoints", "td3_go1_curriculum", "best_checkpoint.pth"),
+        os.path.join(REPO_ROOT, "src", "td3_baseline", "checkpoints", "best_checkpoint.pth"),
+        os.path.join(REPO_ROOT, "src", "td3_baseline", "checkpoints", "td3_go1_curriculum", "latest_checkpoint.pth"),
+        os.path.join(REPO_ROOT, "src", "td3_baseline", "checkpoints", "latest_checkpoint.pth"),
     ]
     for path in candidates:
         if os.path.exists(path):
             return path
-    raise FileNotFoundError("Could not find a valid SAC checkpoint. Provide one via --checkpoint.")
+    raise FileNotFoundError("Could not find a valid TD3 checkpoint. Provide one via --checkpoint.")
 
 
 def overlay_diagnostics(frame, info, step_num, ep_return, stage_name):
@@ -91,7 +91,7 @@ def overlay_diagnostics(frame, info, step_num, ep_return, stage_name):
 
         # Top banner with semi-transparent background
         cv2.rectangle(img, (0, 0), (w, 42), (20, 20, 20), -1)
-        banner_text = f"SAC Simulation | Stage: {stage_name.upper()} | Step: {step_num} | Return: {ep_return:.1f}"
+        banner_text = f"TD3 Simulation | Stage: {stage_name.upper()} | Step: {step_num} | Return: {ep_return:.1f}"
         cv2.putText(img, banner_text, (10, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 1, cv2.LINE_AA)
 
         # Telemetry metrics
@@ -132,14 +132,14 @@ def overlay_diagnostics(frame, info, step_num, ep_return, stage_name):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Simulate and visualize trained SAC policy on Unitree Go1")
+    parser = argparse.ArgumentParser(description="Simulate and visualize trained TD3 policy on Unitree Go1")
     parser.add_argument("--stage", type=str, default="hurdle_flat",
                         help="Curriculum stage: flat, hurdle_flat (flat_hurdle), hurdle")
     parser.add_argument("--checkpoint", type=str, default=None,
-                        help="Path to SAC checkpoint file (.pth)")
+                        help="Path to TD3 checkpoint file (.pth)")
     parser.add_argument("--cpg-mode", type=str, default="auto",
-                        choices=["auto", "fixed_residual", "parametric", "hopf", "parametric_then_hopf", "off"],
-                        help="CPG mode: auto (detected from checkpoint/stage), fixed_residual, parametric, hopf, or parametric_then_hopf")
+                        choices=["auto", "fixed_residual", "parametric", "off", "hopf"],
+                        help="CPG mode: auto (detected from checkpoint/stage), fixed_residual, parametric, off, or hopf")
     parser.add_argument("--num-episodes", type=int, default=3,
                         help="Number of simulation episodes to run")
     parser.add_argument("--max-steps", type=int, default=1000,
@@ -194,7 +194,7 @@ def simulate():
     env_render_mode = "rgb_array" if (use_opencv_viewer or args.render_mode == "rgb_array") else "human"
 
     print("=================================================================")
-    print("=== SAC Quadruped Simulation & Rollout ===")
+    print("=== TD3 Quadruped Simulation & Rollout ===")
     print("=================================================================")
     print(f"Stage:           {stage_name} ({args.stage})")
     print(f"XML Scene:       {os.path.basename(xml_file)}")
@@ -222,11 +222,11 @@ def simulate():
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
 
-    # 3. Load SAC Agent
-    agent = SACAgent(state_dim=state_dim, action_dim=action_dim, device="cpu")
+    # 3. Load TD3 Agent
+    agent = TD3Agent(state_dim=state_dim, action_dim=action_dim, device="cpu")
     loaded_meta = agent.load_checkpoint(checkpoint_path)
     if isinstance(loaded_meta, dict):
-        step_trained = loaded_meta.get("step", "N/A")
+        step_trained = loaded_meta.get("step", loaded_meta.get("total_it", "N/A"))
         eval_rew = loaded_meta.get("best_eval_reward", "N/A")
         step_str = f"{step_trained:,}" if isinstance(step_trained, int) else str(step_trained)
         print(f"Checkpoint loaded successfully! (Trained steps: {step_str}, Record return: {eval_rew})")
@@ -267,7 +267,7 @@ def simulate():
     user_exited = False
 
     if use_opencv_viewer and cv2 is not None:
-        cv2.namedWindow("Go1 SAC Simulation", cv2.WINDOW_AUTOSIZE)
+        cv2.namedWindow("Go1 TD3 Simulation", cv2.WINDOW_AUTOSIZE)
 
     for ep in range(args.num_episodes):
         if user_exited:
@@ -293,7 +293,7 @@ def simulate():
             else:
                 policy_state = state
 
-            # Greedy deterministic action for evaluation
+            # Greedy deterministic action for evaluation (evaluate=True)
             action = agent.select_action(policy_state, evaluate=True)
             next_state, reward, terminated, truncated, info = env.step(action)
 
@@ -308,7 +308,7 @@ def simulate():
                 if frame is not None:
                     annotated = overlay_diagnostics(frame, info, step_count, ep_reward, stage_name)
                     bgr = cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR)
-                    cv2.imshow("Go1 SAC Simulation", bgr)
+                    cv2.imshow("Go1 TD3 Simulation", bgr)
                     elapsed = time.time() - step_t0
                     wait_ms = max(1, int((target_step_time - elapsed) * 1000))
                     key = cv2.waitKey(wait_ms) & 0xFF
@@ -399,7 +399,7 @@ def simulate():
     if frames and args.render_mode == "rgb_array":
         gif_dir = os.path.join(REPO_ROOT, "gifs")
         os.makedirs(gif_dir, exist_ok=True)
-        default_gif_name = f"sac_go1_{stage_name}_rollout.gif"
+        default_gif_name = f"td3_go1_{stage_name}_rollout.gif"
         out_gif = args.gif_path or os.path.join(gif_dir, default_gif_name)
 
         print(f"\nEncoding {len(frames)} frames into animated GIF (30 fps)...")

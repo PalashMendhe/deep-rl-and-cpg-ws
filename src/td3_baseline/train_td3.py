@@ -1,11 +1,11 @@
-"""Soft Actor-Critic (SAC) Training Pipeline for Unitree Go1 Quadruped.
+"""Twin Delayed Deep Deterministic Policy Gradient (TD3) Training Pipeline for Unitree Go1 Quadruped.
 
 Implements Sections A through F:
-  - Section A: Configuration & Hyperparameters (device, seeds, paths, SAC hyperparams, schedule, logging)
-  - Section B: Environment Construction & Curriculum Wrapper (stages 0, 1, 2, CPG selection)
+  - Section A: Configuration & Hyperparameters (device, seeds, paths, TD3 hyperparams, schedule, logging)
+  - Section B: Environment Construction & Curriculum Wrapper (stages 0, 1, 2, CPG selection: parametric -> hopf)
   - Section C: Warmup Phase (Buffer Seeding without network updates)
-  - Section D: Main Environment & Training Loop (action query, step, done logic, buffer, SAC updates)
-  - Section E: Curriculum Progression Logic (stage transitions at 1M and 2M thresholds, buffer preservation)
+  - Section D: Main Environment & Training Loop (action query with exploration noise, step, done logic, buffer, TD3 updates)
+  - Section E: Curriculum Progression Logic (stage transitions at 2M and 4M thresholds, buffer preservation)
   - Section F: Periodic Evaluation Protocol (deterministic evaluation, metrics logging, best/latest checkpoints)
 """
 
@@ -27,7 +27,7 @@ if REPO_ROOT not in sys.path:
 
 from src.go1_env import go1_env
 from src.terrain.config import TerrainConfig
-from src.sac_baseline.sac_agent import SACAgent, ReplayBuffer
+from src.td3_baseline.td3_agent import TD3Agent, ReplayBuffer
 
 
 # ==============================================================================
@@ -37,10 +37,10 @@ from src.sac_baseline.sac_agent import SACAgent, ReplayBuffer
 # Device configuration
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Checkpoint and Log directories inside sac_baseline
-SAC_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_CHECKPOINT_DIR = os.path.join(SAC_DIR, "checkpoints")
-DEFAULT_LOG_DIR = os.path.join(SAC_DIR, "logs")
+# Checkpoint and Log directories inside td3_baseline
+TD3_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_CHECKPOINT_DIR = os.path.join(TD3_DIR, "checkpoints")
+DEFAULT_LOG_DIR = os.path.join(TD3_DIR, "logs")
 
 # Environment XML paths
 MENAGERIE_DIR = os.path.join(REPO_ROOT, "mujoco_menagerie", "unitree_go1")
@@ -49,29 +49,34 @@ OBSTACLE_XML = os.path.join(MENAGERIE_DIR, "scene_obstacles.xml")
 HURDLE_FLAT_XML = os.path.join(MENAGERIE_DIR, "scene_hurdle_flat.xml")
 HURDLE_XML = os.path.join(MENAGERIE_DIR, "scene_hurdle.xml")
 
-# Default SAC Hyperparameters
+# Default TD3 Hyperparameters
 BATCH_SIZE = 256
-LR = 3e-4
+ACTOR_LR = 3e-4
+CRITIC_LR = 3e-4
 GAMMA = 0.99
-TAU = 0.005
+TAU = 0.005          # Target smoothing coefficient (Polyak tau)
+POLICY_NOISE = 0.2   # Target policy smoothing noise std
+NOISE_CLIP = 0.5     # Target policy noise clip limit
+EXPLORATION_NOISE = 0.1  # Exploration noise std added to actions during training
+POLICY_DELAY = 2     # Frequency of delayed policy / target updates
 BUFFER_SIZE = 1_000_000
 
-# Default Training schedule: 1.5M timesteps per stage over 3 curriculum stages (4.5M total)
-TOTAL_TIMESTEPS = 4_500_000
+# Default Training schedule: 3.5M timesteps per stage over 3 curriculum stages (10.5M total)
+TOTAL_TIMESTEPS = 10_500_000
 WARMUP_STEPS = 10_000
 EVAL_FREQ = 20_000
-EVAL_EPISODES = 10
+EVAL_EPISODES = 15
 
-# Curriculum stage boundaries (steps): 1.5M per stage
-STAGE0_END = 1_500_000  # Stage 0 (Flat, Parametric CPG) -> Stage 1 (Rough, Hopf CPG)
-STAGE1_END = 3_000_000  # Stage 1 (Rough, Hopf CPG)       -> Stage 2 (Hurdles, Hopf CPG)
+# Curriculum stage boundaries (steps): 3.5M per stage
+STAGE0_END = 3_500_000  # Stage 0 (Flat, Parametric CPG) -> Stage 1 (Rough, Hopf CPG)
+STAGE1_END = 7_000_000  # Stage 1 (Rough, Hopf CPG)       -> Stage 2 (Hurdles, Hopf CPG)
 
 # CPG mode: "parametric_then_hopf" (Stage 0: parametric -> Stage 1 & 2: hopf; both 18-dim)
 CPG_MODE = os.environ.get("GO1_CPG_MODE", "parametric_then_hopf")
 
 
 def seed_all(seed: int):
-    """Sets random seeds for NumPy, PyTorch, Python random, and Gym."""
+    """Sets random seeds for NumPy, PyTorch, and Python random."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -141,7 +146,7 @@ def build_env(stage: int, cpg_mode: str = CPG_MODE, max_episode_steps: int = 100
 # ==============================================================================
 
 def evaluate_policy(
-    agent: SACAgent,
+    agent: TD3Agent,
     stage: int,
     cpg_mode: str = CPG_MODE,
     num_episodes: int = EVAL_EPISODES,
@@ -151,7 +156,8 @@ def evaluate_policy(
     Runs deterministic evaluation episodes without exploration noise.
     Computes mean evaluation reward, mean forward velocity, and fall rate.
     """
-    eval_env = build_env(stage=stage, cpg_mode=cpg_mode, max_episode_steps=max_episode_steps)
+    effective_cpg = resolve_stage_cpg(stage, cpg_mode)
+    eval_env = build_env(stage=stage, cpg_mode=effective_cpg, max_episode_steps=max_episode_steps)
     eval_returns = []
     eval_velocities = []
     falls = 0
@@ -199,49 +205,38 @@ def evaluate_policy(
 # ==============================================================================
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="SAC Curriculum Training on Go1")
-    parser.add_argument("--run-name", type=str, default="sac_go1_curriculum", help="Run name for logging")
-    parser.add_argument("--total-timesteps", type=int, default=TOTAL_TIMESTEPS, help="Total training timesteps (default: 4.5M)")
+    parser = argparse.ArgumentParser(description="TD3 Curriculum Training on Unitree Go1")
+    parser.add_argument("--run-name", type=str, default="td3_go1_curriculum", help="Run name for logging")
+    parser.add_argument("--total-timesteps", type=int, default=TOTAL_TIMESTEPS, help="Total training timesteps (default: 10.5M)")
     parser.add_argument("--warmup-steps", type=int, default=WARMUP_STEPS, help="Warmup exploration steps")
     parser.add_argument("--eval-freq", type=int, default=EVAL_FREQ, help="Evaluation frequency in timesteps")
     parser.add_argument("--eval-episodes", type=int, default=EVAL_EPISODES, help="Evaluation episodes count")
-    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="SAC batch size")
-    parser.add_argument("--lr", type=float, default=LR, help="Learning rate")
+    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="TD3 batch size")
+    parser.add_argument("--actor-lr", type=float, default=ACTOR_LR, help="Actor learning rate")
+    parser.add_argument("--critic-lr", type=float, default=CRITIC_LR, help="Critic learning rate")
     parser.add_argument("--gamma", type=float, default=GAMMA, help="Discount factor")
-    parser.add_argument("--tau", type=float, default=TAU, help="Target smoothing coefficient")
+    parser.add_argument("--tau", type=float, default=TAU, help="Target smoothing coefficient (Polyak tau)")
+    parser.add_argument("--policy-noise", type=float, default=POLICY_NOISE, help="Target policy smoothing noise std")
+    parser.add_argument("--noise-clip", type=float, default=NOISE_CLIP, help="Target policy noise clip limit")
+    parser.add_argument("--exploration-noise", type=float, default=EXPLORATION_NOISE, help="Action exploration noise std")
+    parser.add_argument("--policy-delay", type=int, default=POLICY_DELAY, help="Delayed policy update frequency")
     parser.add_argument("--buffer-size", type=int, default=BUFFER_SIZE, help="Replay buffer capacity")
     parser.add_argument("--cpg-mode", type=str, default=CPG_MODE,
                         choices=["parametric_then_hopf", "parametric", "hopf", "fixed_residual", "off"],
                         help="CPG mode: parametric_then_hopf (Stage 0: parametric -> Stage 1&2: hopf, 18-dim), parametric, hopf, fixed_residual, or off")
-    parser.add_argument("--stage0-end", type=int, default=STAGE0_END, help="Curriculum threshold for Stage 0 -> 1 (default: 1.5M)")
-    parser.add_argument("--stage1-end", type=int, default=STAGE1_END, help="Curriculum threshold for Stage 1 -> 2 (default: 3.0M)")
+    parser.add_argument("--stage0-end", type=int, default=STAGE0_END, help="Curriculum threshold for Stage 0 -> 1 (default: 3.5M)")
+    parser.add_argument("--stage1-end", type=int, default=STAGE1_END, help="Curriculum threshold for Stage 1 -> 2 (default: 7.0M)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--device", type=str, default=str(DEVICE), help="Computation device (cuda/cpu)")
     parser.add_argument("--checkpoint-dir", type=str, default=None,
-                        help="Checkpoint directory (defaults to src/sac_baseline/checkpoints/<run_name>)")
+                        help="Checkpoint directory (defaults to src/td3_baseline/checkpoints/<run_name>)")
     parser.add_argument("--log-dir", type=str, default=None,
-                        help="TensorBoard log directory (defaults to src/sac_baseline/logs/<run_name>)")
+                        help="TensorBoard log directory (defaults to src/td3_baseline/logs/<run_name>)")
     parser.add_argument("--resume", type=str, default=None, nargs="?", const="auto",
                         help="Resume from checkpoint ('auto' or path to .pth checkpoint file)")
     parser.add_argument("--start-step", type=int, default=None,
                         help="Step count to resume training from (auto-detected if None)")
     return parser.parse_args()
-
-
-class DualLogger:
-    """Tee stdout to both terminal and persistent log file."""
-    def __init__(self, log_path: str):
-        self.terminal = sys.stdout
-        self.log_file = open(log_path, "a", buffering=1, encoding="utf-8")
-
-    def write(self, message: str):
-        self.terminal.write(message)
-        self.log_file.write(message)
-        self.log_file.flush()
-
-    def flush(self):
-        self.terminal.flush()
-        self.log_file.flush()
 
 
 def train():
@@ -258,21 +253,16 @@ def train():
         os.path.join(DEFAULT_LOG_DIR, args.run_name) if args.run_name else DEFAULT_LOG_DIR
     )
     os.makedirs(DEFAULT_CHECKPOINT_DIR, exist_ok=True)
-    os.makedirs(DEFAULT_LOG_DIR, exist_ok=True)
     os.makedirs(checkpoint_dir, exist_ok=True)
     os.makedirs(log_dir, exist_ok=True)
 
-    # Automatically tee output to train_sac.log
-    main_log_file = os.path.join(DEFAULT_LOG_DIR, "train_sac.log")
-    sys.stdout = DualLogger(main_log_file)
-
     writer = SummaryWriter(log_dir=log_dir)
 
-    print(f"=== Starting SAC Training on Go1 ===")
+    print(f"=== Starting TD3 Training on Go1 ===")
     print(f"Device: {device}")
     print(f"Seed: {args.seed}")
     print(f"CPG Mode: {args.cpg_mode}")
-    print(f"Total Timesteps: {args.total_timesteps:,}")
+    print(f"Total Timesteps: {args.total_timesteps:,} (Stage 0: {args.stage0_end:,}, Stage 1: {args.stage1_end:,})")
     print(f"Warmup Steps: {args.warmup_steps:,}")
     print(f"Eval Frequency: {args.eval_freq:,}")
     print(f"Checkpoints: {checkpoint_dir}")
@@ -303,16 +293,15 @@ def train():
     # Determine initial curriculum stage
     initial_step = 0
     if resume_path:
-        # Probe checkpoint for step count or use provided argument / heuristic
         try:
-            probe_dict = torch.load(resume_path, map_location="cpu")
+            probe_dict = torch.load(resume_path, map_location="cpu", weights_only=False)
             if "step" in probe_dict:
                 initial_step = int(probe_dict["step"])
             elif args.start_step is not None:
                 initial_step = args.start_step
             else:
-                initial_step = args.start_step or 0
-                log_file = os.path.join(log_dir, "train_sac.log")
+                initial_step = 0
+                log_file = os.path.join(DEFAULT_LOG_DIR, "train_td3.log")
                 if os.path.exists(log_file):
                     try:
                         with open(log_file, "r") as f:
@@ -341,21 +330,26 @@ def train():
     action_dim = env.action_space.shape[0]
     print(f"Obs Dimension: {state_dim}, Action Dimension: {action_dim} (Initial CPG: {effective_cpg})")
 
-    # Initialize Replay Buffer & SAC Agent
+    # Initialize Replay Buffer & TD3 Agent
     replay_buffer = ReplayBuffer(state_dim=state_dim, action_dim=action_dim, max_size=args.buffer_size)
-    agent = SACAgent(
+    agent = TD3Agent(
         state_dim=state_dim,
         action_dim=action_dim,
-        lr=args.lr,
+        actor_lr=args.actor_lr,
+        critic_lr=args.critic_lr,
         gamma=args.gamma,
         tau=args.tau,
+        policy_noise=args.policy_noise,
+        noise_clip=args.noise_clip,
+        exploration_noise=args.exploration_noise,
+        policy_delay=args.policy_delay,
         device=str(device),
     )
 
     if resume_path:
         print(f"Loading checkpoint weights from: {resume_path}")
         agent.load_checkpoint(resume_path)
-        print(f"Resuming training from Step {start_step:,} (Stage {current_stage}, best eval reward: {best_eval_reward:.2f})")
+        print(f"Resuming training from Step {start_step:,} (Stage {current_stage}, CPG {effective_cpg}, best eval reward: {best_eval_reward:.2f})")
 
         # Seed replay buffer with on-policy transitions
         seed_steps = min(2000, args.warmup_steps)
@@ -402,7 +396,7 @@ def train():
     state, _ = env.reset()
 
     for step in range(start_step, args.total_timesteps):
-        # 1. Action querying: stochastic action for exploration
+        # 1. Action querying: action with exploration noise
         action = agent.select_action(state, evaluate=False)
 
         # 2. Environment step
@@ -437,7 +431,7 @@ def train():
 
             if episode_count % 10 == 0 or (step + 1) % 5000 == 0:
                 print(
-                    f"Step {step + 1:,} | Ep {episode_count:,} (Stage {current_stage}) | "
+                    f"Step {step + 1:,} | Ep {episode_count:,} (Stage {current_stage}, CPG: {effective_cpg}) | "
                     f"Return: {episode_reward:7.2f} | Length: {episode_length:4d} | "
                     f"{'Fell' if terminated else 'Timeout'}"
                 )

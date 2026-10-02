@@ -8,14 +8,14 @@ CPG integration provides a periodic locomotion prior, while SAC learns to modula
 - **Fixed Residual (`fixed_residual`)**: 12-dimensional action where the policy supplies joint offsets over a fixed 2.0 Hz diagonal trot generator.
 - **Hopf/Kuramoto CPG (`hopf`)**: Coupled non-linear oscillator network with foot-contact perturbation recovery.
 
-Training utilizes an automated 3-stage curriculum (0: Flat, 1: Rough Bumps, 2: Hurdles) spanning 3,000,000 timesteps. Replay transitions are preserved across stage transitions to retain gait fundamentals while adapting to new obstacles.
+Training utilizes an automated 3-stage curriculum (0: Flat, 1: Rough Bumps, 2: Hurdles) spanning 4,500,000 timesteps (1.5M timesteps per stage). Replay transitions are preserved across stage transitions to retain gait fundamentals while adapting to new obstacles.
 
 ## Folder Info
 
 | File / Folder | Description |
 | :--- | :--- |
 | `sac_agent.py` | SAC algorithm core: `SquashedGaussianActor` (tanh-bounded continuous actions), `TwinCritic` (double Q-learning), and `ReplayBuffer` (1M capacity). |
-| `train_sac.py` | End-to-end curriculum training orchestrator with warmup buffer seeding, stage boundaries (1M, 2M), evaluation protocols, and checkpointing. |
+| `train_sac.py` | End-to-end curriculum training orchestrator with warmup buffer seeding, stage boundaries (1.5M, 3.0M, 4.5M total), evaluation protocols, and checkpointing. |
 | `simulate_sac.py` | Standalone visualization and rollout renderer with OpenCV HUD telemetry (CPG phase, leg swing indicators, velocities) and GIF exporter. |
 | `checkpoints/` | Storage for trained policy checkpoints (`latest_checkpoint.pth`, `best_checkpoint.pth`, and run-specific models). |
 | `logs/` | TensorBoard event files, training curve plots (`sac_training_curves.png`), and training log files (`train_sac.log`). |
