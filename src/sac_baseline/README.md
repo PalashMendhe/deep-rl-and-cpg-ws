@@ -69,8 +69,24 @@ flowchart TD
 4. **Execution & Buffer Storage**: Actuator targets are simulated in MuJoCo. Transitions `(s, a, r, s', done)` are deposited into the 1,000,000-step `ReplayBuffer`.
 5. **Off-Policy Gradient Update**: Uniform batches of 256 transitions are sampled. The `TwinCritic` evaluates Clipped Double Q-targets to mitigate value overestimation, and the actor is updated using reparameterized policy gradients with automated entropy regularization. Target networks are smoothly updated via Polyak averaging ($\tau = 0.005$).
 
+## Quantized Results
+
+| Metric | SAC |
+| :--- | :--- |
+| **Total Timesteps (scheduled)** | 3,000,000 |
+| **Total Episodes** | 4,007 |
+| **Peak Evaluation Return** | **2,917.71** |
+| **Max Episode Return** | 2,918.91 |
+| **Mean Episode Return** | 1,841.46 |
+| **Stage 0 Mean Return (Flat)** | **2,275.55** |
+| **Stage 1 Mean Return (Rough)** | 1,620.16 |
+| **Stage 2 Mean Return (Hurdle)** | 1,691.19 |
+| **Steps to Return ≥ 2,000** | 124,017 |
+| **Steps to Return ≥ 2,500** | 272,676 |
+
 ## Observations
 
-- **Sample Efficiency**: SAC achieves stable forward trotting ($\ge 2,000$ return) in only 124,017 steps—roughly 1.2x faster than PPO—and reaches a peak evaluation return of **2917.71** within 3.0M steps.
-- **Replay Buffer Advantage**: Retaining past transitions in the 1M-step buffer allows continuous gradient updates per step, enabling rapid stage 0 survival within ~240k steps (vs ~1.2M steps for PPO).
-- **Curriculum Robustness**: Preserving the replay buffer across curriculum transitions allows SAC to maintain stable base trotting while quickly adapting to rough terrain and hurdle clearances (0% fall rate at peak).
+- **Sample Efficiency**: SAC reaches a moving-average return ≥ 2,000 in 124,017 steps—roughly **1.2× faster than PPO** (143,974 steps). Across all three benchmarked algorithms, SAC ranks second behind TD3 (40,473 steps) at this milestone.
+- **Strongest Early-Stage Performance**: SAC achieves the highest mean return on flat terrain (Stage 0: **2,275.55**), outperforming both TD3 (2,177) and PPO (324). The stochastic policy explores the contact-rich flat terrain more broadly, building a stronger locomotion foundation.
+- **Replay Buffer Advantage**: Retaining 1M past transitions allows continuous gradient updates per environment step, enabling reliable stage 0 survival within ~240k steps (vs ~1.2M for PPO).
+- **Curriculum Robustness**: Preserving the replay buffer across stage transitions lets SAC maintain stable base trotting while adapting to rough terrain and hurdle clearances, reaching a record evaluation return of **2,917.71** with 0% fall rate.
