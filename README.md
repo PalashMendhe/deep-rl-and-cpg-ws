@@ -146,7 +146,7 @@ flowchart TB
 
 ### 1. Proximal Policy Optimization (PPO with CPG)
 
-*Source: `src/ppo_baseline/` ([`base_ppo.py`](file:///home/plsh/rl_env2/src/ppo_baseline/base_ppo.py), [`README.md`](file:///home/plsh/rl_env2/src/ppo_baseline/README.md))*
+*Source: `src/ppo_baseline/` ([`base_ppo.py`](src/ppo_baseline/base_ppo.py), [`README.md`](src/ppo_baseline/README.md))*
 
 ```mermaid
 flowchart LR
@@ -182,7 +182,7 @@ flowchart LR
 
 ### 2. Soft Actor-Critic (SAC with CPG)
 
-*Source: `src/sac_baseline/` ([`sac_agent.py`](file:///home/plsh/rl_env2/src/sac_baseline/sac_agent.py), [`train_sac.py`](file:///home/plsh/rl_env2/src/sac_baseline/train_sac.py), [`README.md`](file:///home/plsh/rl_env2/src/sac_baseline/README.md))*
+*Source: `src/sac_baseline/` ([`sac_agent.py`](src/sac_baseline/sac_agent.py), [`train_sac.py`](src/sac_baseline/train_sac.py), [`README.md`](src/sac_baseline/README.md))*
 
 ```mermaid
 flowchart LR
@@ -215,7 +215,7 @@ flowchart LR
 
 ### 3. Twin Delayed Deep Deterministic Policy Gradient (TD3 with CPG)
 
-*Source: `src/td3_baseline/` ([`td3_agent.py`](file:///home/plsh/rl_env2/src/td3_baseline/td3_agent.py), [`train_td3.py`](file:///home/plsh/rl_env2/src/td3_baseline/train_td3.py), [`README.md`](file:///home/plsh/rl_env2/src/td3_baseline/README.md))*
+*Source: `src/td3_baseline/` ([`td3_agent.py`](src/td3_baseline/td3_agent.py), [`train_td3.py`](src/td3_baseline/train_td3.py), [`README.md`](src/td3_baseline/README.md))*
 
 ```mermaid
 flowchart LR
@@ -596,7 +596,7 @@ print(f"Exported {len(frames)} frames.")
 
 ## Tests
 
-The project includes 29 unit and integration tests across 5 test suites. Configuration is managed via the root [`pytest.ini`](file:///home/plsh/rl_env2/pytest.ini), which isolates the test runner from external system plugins:
+The project includes 29 unit and integration tests across 5 test suites. Configuration is managed via the root [`pytest.ini`](pytest.ini), which isolates the test runner from external system plugins:
 
 ```bash
 # Run the complete test suite (29 tests) via Pytest
@@ -647,13 +647,13 @@ bash scripts/run_ci_local.sh
 
 | Document | Contents |
 | :--- | :--- |
-| [`src/ppo_baseline/README.md`](file:///home/plsh/rl_env2/src/ppo_baseline/README.md) | In-depth documentation of the PPO baseline architecture and training |
-| [`src/sac_baseline/README.md`](file:///home/plsh/rl_env2/src/sac_baseline/README.md) | In-depth documentation and quantized results for SAC |
-| [`src/td3_baseline/README.md`](file:///home/plsh/rl_env2/src/td3_baseline/README.md) | In-depth documentation and quantized results for TD3 |
-| [`src/visualizations/comparison_report.md`](file:///home/plsh/rl_env2/src/visualizations/comparison_report.md) | Full analytical comparison report and numerical findings |
-| [`markdowns/implementation_plan.md`](file:///home/plsh/rl_env2/markdowns/implementation_plan.md) | Architecture design: obstacle handling, staged CPG integration, test specifications |
-| [`markdowns/balance_walk_analysis.md`](file:///home/plsh/rl_env2/markdowns/balance_walk_analysis.md) | Root-cause analysis of locomotion balance and CPG joint sign alignment |
-| [`markdowns/update.md`](file:///home/plsh/rl_env2/markdowns/update.md) | Project evolution and historical log of updates |
+| [`src/ppo_baseline/README.md`](src/ppo_baseline/README.md) | In-depth documentation of the PPO baseline architecture and training |
+| [`src/sac_baseline/README.md`](src/sac_baseline/README.md) | In-depth documentation and quantized results for SAC |
+| [`src/td3_baseline/README.md`](src/td3_baseline/README.md) | In-depth documentation and quantized results for TD3 |
+| [`src/visualizations/comparison_report.md`](src/visualizations/comparison_report.md) | Full analytical comparison report and numerical findings |
+| [`markdowns/implementation_plan.md`](markdowns/implementation_plan.md) | Architecture design: obstacle handling, staged CPG integration, test specifications |
+| [`markdowns/balance_walk_analysis.md`](markdowns/balance_walk_analysis.md) | Root-cause analysis of locomotion balance and CPG joint sign alignment |
+| [`markdowns/update.md`](markdowns/update.md) | Project evolution and historical log of updates |
 
 ---
 
