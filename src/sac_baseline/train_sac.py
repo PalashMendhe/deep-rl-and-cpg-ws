@@ -268,7 +268,7 @@ def train():
 
     writer = SummaryWriter(log_dir=log_dir)
 
-    print(f"=== Starting SAC Training on Go1 ===")
+    print("=== Starting SAC Training on Go1 ===")
     print(f"Device: {device}")
     print(f"Seed: {args.seed}")
     print(f"CPG Mode: {args.cpg_mode}")

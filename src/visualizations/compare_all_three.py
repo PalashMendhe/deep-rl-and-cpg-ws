@@ -226,13 +226,13 @@ def main():
     # ── Panel 4: Actual sample footprint ─────────────────────────────────────
     ax = axes[1, 1]
     if len(sac_ss):
-        ax.plot(sac_ss / 1e6, sac_sv, color=C_SAC, lw=2.2, label=f"SAC  (3.0 M)")
+        ax.plot(sac_ss / 1e6, sac_sv, color=C_SAC, lw=2.2, label="SAC  (3.0 M)")
     if len(td3_ss):
         ax.plot(td3_ss * TD3_MAX_STEPS / SAC_MAX_STEPS / 1e6, td3_sv,
-                color=C_TD3, lw=2.2, label=f"TD3  (10.5 M)")
+                color=C_TD3, lw=2.2, label="TD3  (10.5 M)")
     if len(ppo_ss):
         ax.plot(ppo_ss * PPO_MAX_STEPS / SAC_MAX_STEPS / 1e6, ppo_sv,
-                color=C_PPO, lw=2.2, label=f"PPO  (13.5 M)")
+                color=C_PPO, lw=2.2, label="PPO  (13.5 M)")
     ax.set_ylim(-400, 3200)
     ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:.0f} M" if x > 0 else "0"))
     ax.set_title("4 · Sample Footprint:  Return vs Actual Env Interactions")
@@ -247,9 +247,12 @@ def main():
         s0e, s1e = boundaries
         b = [[], [], []]
         for s, v in zip(steps_raw, vals):
-            if s < s0e:   b[0].append(v)
-            elif s < s1e: b[1].append(v)
-            else:         b[2].append(v)
+            if s < s0e:
+                b[0].append(v)
+            elif s < s1e:
+                b[1].append(v)
+            else:
+                b[2].append(v)
         return b
 
     sac_bkts = bucket_by_stage(sac_steps, sac_vals, (1_000_000, 2_000_000))
@@ -277,9 +280,12 @@ def main():
         ("ppo", ppo_bkts, [3, 6, 9], C_PPO),
     ]:
         b = ax.boxplot(bkts, positions=pos, boxprops=dict(facecolor=col, alpha=0.70), **bp_kw)
-        if key == "sac":   h_sac = b["boxes"][0]
-        elif key == "td3": h_td3 = b["boxes"][0]
-        else:              h_ppo = b["boxes"][0]
+        if key == "sac":
+            h_sac = b["boxes"][0]
+        elif key == "td3":
+            h_td3 = b["boxes"][0]
+        else:
+            h_ppo = b["boxes"][0]
 
     ax.set_xticks([2, 5, 8])
     ax.set_xticklabels(["Stage 0\n(Flat)", "Stage 1\n(Rough)", "Stage 2\n(Hurdle)"], fontsize=10)

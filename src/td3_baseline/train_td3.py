@@ -258,7 +258,7 @@ def train():
 
     writer = SummaryWriter(log_dir=log_dir)
 
-    print(f"=== Starting TD3 Training on Go1 ===")
+    print("=== Starting TD3 Training on Go1 ===")
     print(f"Device: {device}")
     print(f"Seed: {args.seed}")
     print(f"CPG Mode: {args.cpg_mode}")
