@@ -305,7 +305,7 @@ Run with the repository virtual environment (`./bin/python`, Python 3.14.4):
 | Model Assets & Compilation | `./bin/python tests/test_model_assets.py` | **5/5 passed** |
 | Named Environments Suite | `./bin/python tests/test_named_envs.py` | **7/7 passed** |
 | Headless Offscreen Rendering | `./bin/python tests/test_render_headless.py` | **2/2 passed** |
-| Complete Pytest Suite | `./bin/python -m pytest tests/ -v` | **29/29 passed** |
+| Pytest (Root `pytest.ini`) | `./bin/pytest` | **29/29 passed in ~5.3s** |
 | Local CI Validation Pipeline | `bash scripts/run_ci_local.sh` | **ALL 4 STAGES PASSED** |
 
 ---
@@ -313,14 +313,26 @@ Run with the repository virtual environment (`./bin/python`, Python 3.14.4):
 ## Repository layout
 
 ```
+pytest.ini                     Pytest configuration (plugin isolation, test paths, filters)
+pyproject.toml                 Project metadata and Ruff configuration
+requirements.txt               Core dependencies (gymnasium, mujoco, stable-baselines3, torch, etc.)
 media/
   gif/
-    go1_walking.gif             Hero locomotion demonstration
+    go1_walking.gif            Hero locomotion demonstration
   PNG/
-    ppo_vs_sac_vs_td3_comparison.png   6-panel comprehensive benchmark dashboard
-    ppo_vs_sac_vs_td3_returns.png      Focused curriculum learning curves
+    ppo_vs_sac_vs_td3_comparison.png  6-panel comprehensive benchmark dashboard
+    ppo_vs_sac_vs_td3_returns.png     Focused curriculum learning curves
+    ppo_vs_sac_comparison.png         2-algorithm comparison dashboard
+    ppo_vs_sac_returns.png            2-algorithm learning curves
+markdowns/
+  balance_walk_analysis.md     Locomotion balance and CPG joint sign alignment analysis
+  clean_up.md                  Repository cleanup log
+  comparison_report.md         Markdown analytical summary report
+  implementation_plan.md       Architecture design and obstacle curriculum plan
+  update.md                    Project evolution and development log
 src/
   go1_env.py                   go1_env: MuJoCo Gymnasium env (56-dim obs, reward shaping, CPG wiring)
+  eval_render.py               Legacy SB3 checkpoint evaluation and GIF rendering script
   cpg/
     types.py                   CPGParams, OscillatorState, trot phase offsets & coupling
     fixed_trot.py              FixedTrotCPG — open-loop trot + tall stance
@@ -351,6 +363,9 @@ src/
     compare_all_three.py       3-algorithm benchmark plot generation script
     comparison_metrics.json    Compiled numerical evaluation statistics
     comparison_report.md       Markdown analytical summary report
+    tensorboard_logs/          PPO TensorBoard reference logs (raw & scaled)
+  checkpoints/                 SB3 checkpoints (your_run_name)
+  logs/                        SB3 TensorBoard logs (your_run_name)
 tests/
   test_cpg.py                  CPG kinematics & phase stability (6 tests)
   test_obstacle_env.py         Observation, reward, and obstacle randomization (9 tests)
@@ -372,7 +387,7 @@ Use the virtual environment at the repository root (`./bin/python`), or create a
 python3 -m venv .venv
 source .venv/bin/activate
 pip install "gymnasium[mujoco]==1.3.0" "stable-baselines3[extra]==2.9.0" \
-            numpy scipy imageio torch matplotlib tensorboard
+            numpy scipy imageio torch matplotlib tensorboard pytest ruff
 ```
 
 Package versions:
@@ -581,20 +596,22 @@ print(f"Exported {len(frames)} frames.")
 
 ## Tests
 
-Execute the test suite using the virtual environment interpreter:
+The project includes 29 unit and integration tests across 5 test suites. Configuration is managed via the root [`pytest.ini`](file:///home/plsh/rl_env2/pytest.ini), which isolates the test runner from external system plugins:
 
 ```bash
-# Run complete test suite via pytest (29 tests)
-./bin/python -m pytest tests/ -v
+# Run the complete test suite (29 tests) via Pytest
+./bin/pytest
+# or with python -m pytest
+./bin/python -m pytest
 
-# Run individual standalone test runners
-./bin/python tests/test_cpg.py            # 6 tests: CPG kinematics & phase stability
-./bin/python tests/test_obstacle_env.py   # 9 tests: Obs dims, reward bounds, obstacle randomization
-./bin/python tests/test_model_assets.py   # 5 tests: MuJoCo XML compilation & joint limits
-./bin/python tests/test_named_envs.py     # 7 tests: Named environment registration & reset dynamics
-./bin/python tests/test_render_headless.py # 2 tests: Offscreen rgb_array & GIF export pipeline
+# Run individual test suites
+./bin/pytest tests/test_cpg.py            # 6 tests: CPG kinematics & phase stability
+./bin/pytest tests/test_obstacle_env.py   # 9 tests: Obs dims, reward bounds, obstacle randomization
+./bin/pytest tests/test_model_assets.py   # 5 tests: MuJoCo XML compilation & joint limits
+./bin/pytest tests/test_named_envs.py     # 7 tests: Named environment registration & reset dynamics
+./bin/pytest tests/test_render_headless.py # 2 tests: Offscreen rgb_array & GIF export pipeline
 
-# Run local CI pipeline matching GitHub Actions
+# Run the local CI validation pipeline (mirrors GitHub Actions)
 bash scripts/run_ci_local.sh
 ```
 
@@ -604,21 +621,25 @@ bash scripts/run_ci_local.sh
 
 | Path | Generator | Content |
 | :--- | :--- | :--- |
-| `ppo_checkpoint_latest.pth` | `base_ppo.py` | PPO actor/critic network weights and optimizer states |
-| `src/sac_baseline/checkpoints/` | `train_sac.py` | SAC actor, twin critic, target networks, and log files |
-| `src/td3_baseline/checkpoints/` | `train_td3.py` | TD3 deterministic actor, twin critic, target networks |
+| `ppo_checkpoint_latest.pth` | `src/ppo_baseline/base_ppo.py` | PPO actor/critic network weights and optimizer states (root) |
+| `src/sac_baseline/checkpoints/` | `src/sac_baseline/train_sac.py` | SAC actor, twin critic, target networks (`best` / `latest`) |
+| `src/td3_baseline/checkpoints/` | `src/td3_baseline/train_td3.py` | TD3 deterministic actor, twin critic, target networks (`best` / `latest`) |
 | `src/checkpoints/your_run_name/` | `src/ppo_baseline/train.py` | SB3 `rl_model_*_steps.zip` and `latest_vecnormalize.pkl` |
-| `media/PNG/` | `compare_all_three.py` | 3-algorithm comparison plots and returns curves |
+| `src/sac_baseline/logs/` | `src/sac_baseline/train_sac.py` | SAC TensorBoard events and training log files |
+| `src/td3_baseline/logs/` | `src/td3_baseline/train_td3.py` | TD3 TensorBoard events and training log files |
+| `media/PNG/` | `src/visualizations/compare_all_three.py` | 3-algorithm comparison plots and return curves |
 | `media/gif/` | Rollout renderers | Locomotion GIF animations (`go1_walking.gif`) |
+| `markdowns/` | Documentation & analysis | Architecture plan, balance analysis, cleanup log |
 
 ---
 
 ## Known limitations & notes
 
-1. **Headless frame capture**: Interactive scripts default to `render_mode="human"` (returns `None`). Specify `render_mode="rgb_array"` to generate pixel frames.
-2. **Form weight schedule**: In `base_ppo.py`, kinematic penalties are weighted by `form_weight` scheduled dynamically from `0.2` to `1.0`.
-3. **Replay buffer storage**: SAC and TD3 maintain 1,000,000 transitions in RAM (~1.2 GB memory footprint per active run).
-4. **Vendored assets**: Do not edit `mujoco_menagerie/` XML files directly; modify terrain dynamically at runtime via `TerrainConfig`.
+1. **Path resolution**: All scripts dynamically resolve the repository root (`REPO_ROOT = os.path.dirname(...)`), allowing execution from any working directory or environment location.
+2. **Headless frame capture**: Interactive scripts default to `render_mode="human"` (returns `None`). Specify `render_mode="rgb_array"` to generate pixel frames.
+3. **Form weight schedule**: In `base_ppo.py`, kinematic penalties are weighted by `form_weight` scheduled dynamically from `0.2` to `1.0`.
+4. **Replay buffer storage**: SAC and TD3 maintain 1,000,000 transitions in RAM (~1.2 GB memory footprint per active run).
+5. **Vendored assets**: Do not edit `mujoco_menagerie/` XML files directly; modify terrain dynamically at runtime via `TerrainConfig`.
 
 ---
 
@@ -630,7 +651,9 @@ bash scripts/run_ci_local.sh
 | [`src/sac_baseline/README.md`](file:///home/plsh/rl_env2/src/sac_baseline/README.md) | In-depth documentation and quantized results for SAC |
 | [`src/td3_baseline/README.md`](file:///home/plsh/rl_env2/src/td3_baseline/README.md) | In-depth documentation and quantized results for TD3 |
 | [`src/visualizations/comparison_report.md`](file:///home/plsh/rl_env2/src/visualizations/comparison_report.md) | Full analytical comparison report and numerical findings |
+| [`markdowns/implementation_plan.md`](file:///home/plsh/rl_env2/markdowns/implementation_plan.md) | Architecture design: obstacle handling, staged CPG integration, test specifications |
 | [`markdowns/balance_walk_analysis.md`](file:///home/plsh/rl_env2/markdowns/balance_walk_analysis.md) | Root-cause analysis of locomotion balance and CPG joint sign alignment |
+| [`markdowns/update.md`](file:///home/plsh/rl_env2/markdowns/update.md) | Project evolution and historical log of updates |
 
 ---
 

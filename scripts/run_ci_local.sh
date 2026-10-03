@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Local CI Runner: Mirrors GitHub Actions CI pipeline locally.
-# Runs: Ruff Linting -> MuJoCo Asset Compilation -> Pytest Suite (20 tests)
+# Runs: Ruff Linting -> MuJoCo Asset Compilation -> Pytest Suite (29 tests)
 # ==============================================================================
 set -euo pipefail
 
