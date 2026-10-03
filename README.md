@@ -667,3 +667,13 @@ Multiple AI models like Deepseek v4.1/v4.0 flash, Muse Spark 3.1 Contributor, GL
 - **Robot Model & Assets**: Vendored from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie) Unitree Go1 (BSD-3-Clause, © Unitree Robotics).
 - **Libraries**: Built with [Gymnasium](https://gymnasium.farama.org/), [MuJoCo](https://mujoco.org/), [Stable-Baselines3](https://stable-baselines3.readthedocs.io/), and [PyTorch](https://pytorch.org/).
 - **License**: MIT © Palash Siddharth Mendhe
+
+---
+
+## References
+- This project implements CPG architecture referenced in the following thesis:
+**On the Reinforcement Learning Analysis and Learning the Control of Humanoid Robot Leg**
+
+- Tuomas Haarnoja, Aurick Zhou, Kristian Hartikainen, George Tucker, Sehoon Ha, Jie Tan, Vikash Kumar, Henry Zhu, Abhishek Gupta, Pieter Abbeel, and Sergey Levine. **Soft Actor-Critic Algorithms and Applications**. *arXiv preprint arXiv:1812.05905*, 2018. [https://arxiv.org/abs/1812.05905](https://arxiv.org/abs/1812.05905)
+- C. Guo, Y. Chen, J. Chen, and Z. Zhang, "Mobile Robot Dynamic Path Planning and Obstacle Avoidance Based on Improved DWA Algorithm," *arXiv preprint arXiv:2405.15460*, 2024. [https://arxiv.org/abs/2405.15460](https://arxiv.org/abs/2405.15460)
+- Schulman, J., Wolski, F., Dhariwal, P., Radford, A., & Klimov, O. (2017). Proximal Policy Optimization Algorithms. *arXiv preprint arXiv:1707.06347*. https://arxiv.org/abs/1707.06347
