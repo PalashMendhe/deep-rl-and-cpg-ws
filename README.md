@@ -666,7 +666,7 @@ Multiple AI models like Deepseek v4.1/v4.0 flash, Muse Spark 3.1 Contributor, GL
 
 - **Robot Model & Assets**: Vendored from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie) Unitree Go1 (BSD-3-Clause, © Unitree Robotics).
 - **Libraries**: Built with [Gymnasium](https://gymnasium.farama.org/), [MuJoCo](https://mujoco.org/), [Stable-Baselines3](https://stable-baselines3.readthedocs.io/), and [PyTorch](https://pytorch.org/).
-- **License**: MIT © Palash Siddharth Mendhe
+- **License**: GNU GPL v3.0 © Palash Siddharth Mendhe
 
 ---
 
