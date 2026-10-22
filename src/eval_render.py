@@ -111,14 +111,26 @@ height_penalties = []
 trot_flags      = []
 x_velocities    = []
 
+import time
+
+speed = float(os.environ.get("GO1_SPEED", "1.0"))
+target_step_dt = 0.02 / max(0.1, speed)  # 50 Hz base physics step
+
+if not SAVE_GIF:
+    print(f"Realtime Mode: Enabled ({speed:.1f}x speed)")
+
 for _ in range(1000):
+    step_t0 = time.time()
     action, _ = model.predict(obs, deterministic=True)
     obs, reward, done, info = eval_env.step(action)
 
-    if SAVE_GIF:
-        frame = eval_env.render()
-        if frame is not None:
-            writer.append_data(frame)
+    frame = eval_env.render()
+    if SAVE_GIF and frame is not None:
+        writer.append_data(frame)
+    elif not SAVE_GIF:
+        elapsed = time.time() - step_t0
+        if target_step_dt > elapsed:
+            time.sleep(target_step_dt - elapsed)
 
     raw_info = info[0] if isinstance(info, (list, tuple)) else info
     if isinstance(raw_info, dict):

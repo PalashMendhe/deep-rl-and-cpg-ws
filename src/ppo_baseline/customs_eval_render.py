@@ -142,7 +142,7 @@ cpg_mode = checkpoint.get("cpg_mode", "fixed_residual") if isinstance(checkpoint
 print(f"Eval: stage={STAGE} xml={os.path.basename(EVAL_XML)} cpg_mode={cpg_mode} "
       f"actor=({state_dim},{residual_dim}+{mod_dim})")
 
-render_mode_env = os.environ.get("GO1_RENDER_MODE", "rgb_array")
+render_mode_env = os.environ.get("GO1_RENDER_MODE", "human")
 is_human = (render_mode_env == "human")
 viewer_backend = os.environ.get("GO1_VIEWER", "opencv").lower()
 speed = float(os.environ.get("GO1_SPEED", "1.0"))
