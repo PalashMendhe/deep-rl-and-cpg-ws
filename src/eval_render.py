@@ -1,83 +1,151 @@
+"""Evaluation renderer for the flat-body-trot PPO policy (SB3).
+
+Loads the trained flat_trot_ppo_v1 model and runs a visual rollout.
+Tracks gait-quality metrics specific to the flat-body trot:
+  - trunk height (should stay near 0.30 m)
+  - pitch angle (should stay near 0 rad)
+  - body_height_penalty
+  - trot rhythm validity
+
+Usage:
+    # Headless — saves a GIF
+    GO1_SAVE_GIF=1 python src/eval_render.py
+
+    # Live viewer
+    python src/eval_render.py
+"""
 import gymnasium as gym
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import VecNormalize, DummyVecEnv
 import imageio
 import numpy as np
 import os
-from src.go1_env import go1_env
+import sys
+from scipy.spatial.transform import Rotation as R
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CHECKPOINT_DIR = os.environ.get("GO1_CHECKPOINT_DIR", os.path.join(REPO_ROOT, "src", "checkpoints", "your_run_name"))
-model_path = os.path.join(CHECKPOINT_DIR, "rl_model_120000_steps.zip")              # Path to the trained model file.
-vecnorm_path = os.path.join(CHECKPOINT_DIR, "latest_vecnormalize.pkl")          # Path to the vector normalization file.
-EVAL_STAGE = os.environ.get("GO1_EVAL_STAGE", "flat")  # flat | hurdle
-EVAL_XML = os.environ.get(
-    "GO1_EVAL_XML",
-    os.path.join(
-        REPO_ROOT,
-        "mujoco_menagerie",
-        "unitree_go1",
-        "scene_obstacles.xml" if EVAL_STAGE == "hurdle" else "scene.xml",
-    ),
-)
-output_gif = os.path.join(CHECKPOINT_DIR, f"output_{EVAL_STAGE}.gif")                  # Path to save the output GIF.
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
-'''
-Create the evaluation environment using DummyVecEnv and load the vector normalization parameters.
-human rendering mode is enabled for visualization
-change to rgb_array if you want to save the gif
-'''
-eval_env = DummyVecEnv([lambda: go1_env(xml_file=EVAL_XML, render_mode="human")]) # Replace with the actual path to your XML file for the Go1 environment.
+from src.go1_env import go1_env
+
+# ── Paths ────────────────────────────────────────────────────────────────────
+RUN_NAME = os.environ.get("GO1_RUN_NAME", "flat_trot_ppo_v1")
+CHECKPOINT_DIR = os.environ.get(
+    "GO1_CHECKPOINT_DIR",
+    os.path.join(REPO_ROOT, "src", "checkpoints", RUN_NAME),
+)
+
+# Pick the latest checkpoint zip automatically, or use a specific one.
+_zips = [f for f in os.listdir(CHECKPOINT_DIR) if f.endswith(".zip")] if os.path.isdir(CHECKPOINT_DIR) else []
+_default_model = (
+    os.path.join(CHECKPOINT_DIR, max(_zips, key=lambda f: os.path.getctime(os.path.join(CHECKPOINT_DIR, f))))
+    if _zips else os.path.join(CHECKPOINT_DIR, "final.zip")
+)
+model_path    = os.environ.get("GO1_MODEL_PATH", _default_model)
+vecnorm_path  = os.path.join(CHECKPOINT_DIR, "latest_vecnormalize.pkl")
+
+FLAT_XML = os.path.join(REPO_ROOT, "mujoco_menagerie", "unitree_go1", "scene.xml")
+SAVE_GIF = os.environ.get("GO1_SAVE_GIF", "0") == "1"
+output_gif = os.path.join(CHECKPOINT_DIR, "flat_trot_eval.gif")
+
+print(f"[eval] model     : {model_path}")
+print(f"[eval] vecnorm   : {vecnorm_path}")
+print(f"[eval] cpg_mode  : fixed_residual | form_weight=1.0")
+
+# ── Environment ──────────────────────────────────────────────────────────────
+render_mode = "human" if not SAVE_GIF else "rgb_array"
+
+
+def _make_env():
+    env = go1_env(
+        xml_file=FLAT_XML,
+        cpg_mode="fixed_residual",      # flat-body trot CPG
+        render_mode=render_mode,
+    )
+    env.form_weight = 1.0               # full kinematic penalties (no curriculum)
+    return env
+
+
+eval_env = DummyVecEnv([_make_env])
 eval_env = VecNormalize.load(vecnorm_path, eval_env)
 eval_env.training = False
 eval_env.norm_reward = False
 
 model = PPO.load(model_path, env=eval_env)
 
+# ── Camera setup ─────────────────────────────────────────────────────────────
 obs = eval_env.reset()
 mujoco_env = eval_env.envs[0].unwrapped
 eval_env.render()
 
 viewer = getattr(mujoco_env.mujoco_renderer, "viewer", None)
-if viewer is not None:
-    viewer.cam.trackbodyid = mujoco_env.model.body('trunk').id  # check actual body name, may not be "trunk"
-    viewer.cam.type = 2  # mjCAMERA_TRACKING
-    viewer.cam.distance = 3.0
-    viewer.cam.elevation = -20
+if viewer is not None and hasattr(viewer, "cam"):
+    viewer.cam.trackbodyid = mujoco_env.model.body("trunk").id
+    viewer.cam.type = 2         # mjCAMERA_TRACKING
+    viewer.cam.distance = 2.5   # closer — flat trot is compact
+    viewer.cam.elevation = -18  # slight downward angle to see the flat body
+    viewer.cam.azimuth = 90     # side-on view shows body level best
 
-SAVE_GIF = os.environ.get("GO1_SAVE_GIF", "0") == "1"  # GIF slows rendering; opt in per run.
+# ── GIF writer ───────────────────────────────────────────────────────────────
 if SAVE_GIF:
     writer = imageio.get_writer(output_gif, fps=30)
 
+# ── Rollout ──────────────────────────────────────────────────────────────────
 episodes = 0
-jump_hits = 0
-jump_successes = 0
-jump_landings = 0.0
-clearances = []
+
+# Gait-quality accumulators (flat-body specific)
+trunk_heights   = []
+pitch_angles    = []
+height_penalties = []
+trot_flags      = []
+x_velocities    = []
+
 for _ in range(1000):
     action, _ = model.predict(obs, deterministic=True)
     obs, reward, done, info = eval_env.step(action)
+
     if SAVE_GIF:
-        writer.append_data(eval_env.render())
+        frame = eval_env.render()
+        if frame is not None:
+            writer.append_data(frame)
+
     raw_info = info[0] if isinstance(info, (list, tuple)) else info
     if isinstance(raw_info, dict):
-        if "clearance_m" in raw_info:
-            clearances.append(float(raw_info.get("clearance_m", 0.0)))
-        if "landing_bonus" in raw_info:
-            jump_landings += float(raw_info.get("landing_bonus", 0.0))
+        trunk_heights.append(float(raw_info.get("current_height", 0.0)))
+        height_penalties.append(float(raw_info.get("raw_body_height_penalty", 0.0)))
+        trot_flags.append(float(raw_info.get("raw_trot_flag", 0.0)))
+        x_velocities.append(float(raw_info.get("local_x_velocity", 0.0)))
+
+        # Compute pitch from raw env state
+        mj = eval_env.envs[0].unwrapped
+        q = mj.data.qpos[3:7]
+        euler = R.from_quat([q[1], q[2], q[3], q[0]]).as_euler("xyz")
+        pitch_angles.append(float(euler[1]))
+
     if done[0]:
         episodes += 1
-        if isinstance(raw_info, dict) and "jump_success" in raw_info:
-            jump_hits += int(bool(raw_info.get("hurdle_hit", False)))
-            jump_successes += int(bool(raw_info.get("jump_success", False)))
-        if episodes >= 20:
+        if episodes >= 10:
             break
 
-print(f"Eval stage={EVAL_STAGE} episodes={episodes} "
-      f"hit_rate={jump_hits/max(1,episodes):.2f} "
-      f"success_rate={jump_successes/max(1,episodes):.2f} "
-      f"mean_clearance={float(np.mean(clearances)) if clearances else 0.0:.3f}m "
-      f"mean_landing_bonus={jump_landings/max(1,episodes):.3f}")
+# ── Summary ──────────────────────────────────────────────────────────────────
+def _fmt(arr, unit=""):
+    if not arr:
+        return "n/a"
+    return f"mean={np.mean(arr):.4f}{unit} std={np.std(arr):.4f}{unit} max={np.max(np.abs(arr)):.4f}{unit}"
+
+print(f"\n{'─'*60}")
+print(f"  Flat-Body Trot Eval  |  {episodes} episodes")
+print(f"{'─'*60}")
+print(f"  Trunk height  : {_fmt(trunk_heights, 'm')}  [target: 0.30 m]")
+print(f"  Pitch angle   : {_fmt(pitch_angles, 'rad')}  [target: ~0]")
+print(f"  Height penalty: {_fmt(height_penalties)}")
+print(f"  Trot validity : valid_frac={1.0 - np.mean(trot_flags):.3f}  [target: 1.0]")
+print(f"  X velocity    : {_fmt(x_velocities, 'm/s')}  [target: 0.6 m/s]")
+print(f"{'─'*60}")
 
 if SAVE_GIF:
-    writer.close()  
+    writer.close()
+    print(f"\nGIF saved → {output_gif}")
+
+eval_env.close()
