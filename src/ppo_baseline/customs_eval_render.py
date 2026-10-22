@@ -43,8 +43,11 @@ def resolve_checkpoint_path():
     candidates = [
         os.path.join(REPO_ROOT, "ppo_checkpoint_latest.pth"),
         CHECKPOINT_PATH,  # same file base_ppo.py writes -> no path drift
+        os.path.join(REPO_ROOT, "flat_checkpoints", "ppo_checkpoint_3010560.pth"),
+        os.path.join(REPO_ROOT, "flat_checkpoints", "ppo_checkpoint_1515520.pth"),
         os.path.join(REPO_ROOT, "ppo_checkpoint_6000640.pth"),
         os.path.join(REPO_ROOT, "checkpoints", "ppo_checkpoint_latest.pth"),
+        os.path.join(REPO_ROOT, "checkpoints", "archive_20260928", "ppo_checkpoint_latest.pth"),
         os.path.join(REPO_ROOT, "checkpoints", "ppo_checkpoint_6000640.pth"),
         os.path.join(SCRIPT_DIR, "ppo_checkpoint_latest.pth"),
         os.path.join(os.getcwd(), "ppo_checkpoint_latest.pth"),
@@ -53,6 +56,16 @@ def resolve_checkpoint_path():
     for path in candidates:
         if path and os.path.exists(path):
             return path
+
+    # Fallback search for any ppo_checkpoint_*.pth in REPO_ROOT / flat_checkpoints
+    import glob
+    for search_dir in [os.path.join(REPO_ROOT, "flat_checkpoints"), os.path.join(REPO_ROOT, "checkpoints"), REPO_ROOT]:
+        found = glob.glob(os.path.join(search_dir, "**", "ppo_checkpoint_*.pth"), recursive=True)
+        if found:
+            # Sort by modification time descending
+            found.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+            return found[0]
+
     raise FileNotFoundError("Could not find a PPO checkpoint in the workspace.")
 
 
