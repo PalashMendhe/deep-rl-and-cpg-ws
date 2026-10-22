@@ -110,7 +110,10 @@ class go1_env(MujocoEnv, utils.EzPickle):
       self._contact_force_range = contact_force_range
       self._terminate_when_unhealthy = terminate_when_unhealthy
       if healthy_z_range == (0.25, 0.45) or healthy_z_range is None:
-          self._healthy_z_range = (0.25, 0.70) if (terrain_config and terrain_config.mode in ("hurdle", "mixed")) else (0.25, 0.45)
+          # Flat-body trot: tighter ceiling (0.38 m) prevents the trunk from
+          # rising above the target zone during swing. Hurdle scenes keep the
+          # wider range to allow the body to clear the obstacle.
+          self._healthy_z_range = (0.25, 0.70) if (terrain_config and terrain_config.mode in ("hurdle", "mixed")) else (0.25, 0.38)
       else:
           self._healthy_z_range = healthy_z_range
       self._exclude_current_position_from_observation = exclude_current_position_from_observation
@@ -415,10 +418,19 @@ class go1_env(MujocoEnv, utils.EzPickle):
         navigation_penalty = drift_penalty + yaw_penalty + heading_penalty
 
         # --- 3. KINEMATIC PACKAGE (Scaled by Curriculum) ---
-        # A. Posture Penalty
-        posture_penalty = 3.0 * (roll**2 + pitch**2)
-        
-        # B. Foot Clearance Penalty
+        # A. Posture Penalty — flat-body trot: pitch is penalised 3× harder
+        #    than roll because forward pitch is what causes the trunk to bob.
+        posture_penalty = 2.0 * roll**2 + 6.0 * pitch**2
+
+        # B. Body-Height Penalty — keep trunk at target_trunk_z = 0.30 m.
+        #    Penalty is zero inside the ±0.02 m band and grows quadratically
+        #    outside it (soft dead-band via relu-squared).
+        target_trunk_z = 0.30
+        height_band = 0.02
+        height_deviation = max(0.0, abs(self.data.qpos[2] - target_trunk_z) - height_band)
+        body_height_penalty = 8.0 * height_deviation ** 2
+
+        # C. Foot Clearance Penalty
         fl_z = self.data.site('FL').xpos[2]
         fr_z = self.data.site('FR').xpos[2]
         rl_z = self.data.site('RL').xpos[2]
@@ -427,13 +439,14 @@ class go1_env(MujocoEnv, utils.EzPickle):
         diagonal_1_height = fl_z + rr_z
         diagonal_2_height = fr_z + rl_z
 
-        target_height_diff = 0.10
+        # Flat-body trot has a smaller swing arc — target diff reduced to 0.07 m.
+        target_height_diff = 0.07
         actual_height_diff = abs(diagonal_1_height - diagonal_2_height)
         # Hinge-style: reward achieved swing lift, never punish standing
-        # support (diff ~ 0). Full bonus once the diagonal pair lifts 0.10 m.
+        # support (diff ~ 0). Full bonus once the diagonal pair lifts 0.07 m.
         clearance_penalty = 5.0 * max(0.0, target_height_diff - actual_height_diff) ** 2
 
-        # C. Trot Rhythm Penalty
+        # D. Trot Rhythm Penalty
         FL, FR, RL, RR = self._get_foot_contacts()
         diagonal_1 = int(FL) + int(RR)
         diagonal_2 = int(FR) + int(RL)
@@ -441,7 +454,7 @@ class go1_env(MujocoEnv, utils.EzPickle):
         is_valid_trot = (diagonal_1 == 2 and diagonal_2 == 0) or (diagonal_1 == 0 and diagonal_2 == 2)
         trot_penalty_flag = 0.0 if is_valid_trot else 1.0
 
-        # D. Effort & Velocity Limits
+        # E. Effort & Velocity Limits
         effort_penalty = 0.005 * np.sum(np.square(action12))
         leg_joint_velocities = self.data.qvel[6:]
         joint_vel_penalty = 0.0005 * np.sum(np.square(leg_joint_velocities))
@@ -463,23 +476,26 @@ class go1_env(MujocoEnv, utils.EzPickle):
             # Allow all 4 feet off ground without trot penalty, and allow pitch for takeoff
             active_trot_penalty = 0.0
             active_clearance_penalty = 0.0
+            active_body_height_penalty = 0.0
             active_posture_penalty = 0.5 * (roll ** 2)  # Pitch is required to leap; only lightly penalize roll
         else:
             active_trot_penalty = 2.0 * trot_penalty_flag
             active_clearance_penalty = clearance_penalty
+            active_body_height_penalty = body_height_penalty
             active_posture_penalty = posture_penalty
 
-        # E. Calculate Raw Kinematic Penalty (Must be summed before scaling)
+        # F. Calculate Raw Kinematic Penalty (Must be summed before scaling)
         raw_kinematic_penalty = (
             active_trot_penalty
             + active_clearance_penalty
+            + active_body_height_penalty
             + active_posture_penalty
             + effort_penalty
             + joint_vel_penalty
         )
 
-        # F. Apply Curriculum Multiplier
-        current_form_weight = getattr(self, "form_weight", 0.0) # Defaults to 0.0 early in training
+        # G. Apply Curriculum Multiplier
+        current_form_weight = getattr(self, "form_weight", 1.0)  # Flat-body trot: default 1.0 (no curriculum ramp)
         scaled_kinematic_penalty = raw_kinematic_penalty * current_form_weight
 
         # --- 4. JUMP PACKAGE (hurdle / mixed terrain only) ---
@@ -553,6 +569,7 @@ class go1_env(MujocoEnv, utils.EzPickle):
             "raw_trot_flag": trot_penalty_flag,
             "raw_clearance_error": actual_height_diff,
             "raw_posture_penalty": posture_penalty,
+            "raw_body_height_penalty": body_height_penalty,
             "active_form_weight": current_form_weight,
 
             # Obstacle / jump tracking

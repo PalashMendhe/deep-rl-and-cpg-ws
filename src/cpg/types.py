@@ -20,8 +20,12 @@ TROT_COUPLING = np.array([
 class CPGParams:
     phase: float = 0.0
     frequency_hz: float = 2.0
-    thigh_amp: float = 0.25
-    calf_amp: float = -0.35
+    # Flat-body trot defaults (feature/flat-body-trot branch).
+    # Reduced from old dog-like values (thigh=0.25, calf=-0.35) to keep
+    # the trunk parallel to the floor during stride.
+    thigh_amp: float = 0.15
+    calf_amp: float = -0.20
+    hip_amp: float = 0.08   # small lateral abduction drive (biological trot)
     phase_offsets: np.ndarray = field(
         default_factory=lambda: TROT_PHASE_OFFSETS.copy())
     duty_factor: float = 0.5

@@ -14,22 +14,35 @@ if REPO_ROOT not in sys.path:
 from src.go1_env import go1_env
 from src.terrain.config import TerrainConfig
 
-RUN_NAME = "your_run_name"  # Replace with your desired run name
+# -----------------------------------------------------------------------
+# Flat-Body Trot — PPO training (feature/flat-body-trot branch)
+#
+# Goals:
+#   • Biological trot gait: trunk stays flat and parallel to the floor.
+#   • CPG mode: fixed_residual — RL policy learns small residual corrections
+#     on top of the open-loop FixedTrotCPG waveform.
+#   • No curriculum ramp: form_weight = 1.0 from step 0 (the CPG already
+#     provides a warm gait baseline, so full kinematic penalties are safe
+#     from the start).
+# -----------------------------------------------------------------------
+
+RUN_NAME = "flat_trot_ppo_v1"
 CHECKPOINT_DIR = os.path.join(REPO_ROOT, "src", "checkpoints", RUN_NAME)
 LOG_DIR = os.path.join(REPO_ROOT, "src", "logs", RUN_NAME)
 FLAT_XML = os.path.join(REPO_ROOT, "mujoco_menagerie", "unitree_go1", "scene.xml")
 OBSTACLE_XML = os.path.join(REPO_ROOT, "mujoco_menagerie", "unitree_go1", "scene_obstacles.xml")
-# Curriculum stage: 0 = flat trot, 1 = bumps, 2 = hurdle. Override via env.
+
+# CPG mode is fixed_residual for this branch; override via env var if needed.
+CPG_MODE = os.environ.get("GO1_CPG_MODE", "fixed_residual")
+
+# Curriculum stage: 0 = flat trot (only flat supported on this branch).
 CURRICULUM_STAGE = int(os.environ.get("GO1_STAGE", "0"))
-CPG_MODE = os.environ.get("GO1_CPG_MODE", "off")  # SB3 path stays cpg off for now
-STAGE_XML = {0: FLAT_XML, 1: OBSTACLE_XML, 2: OBSTACLE_XML}
-STAGE_TERRAIN = {0: "flat", 1: "rough", 2: "hurdle"}
+STAGE_XML = {0: FLAT_XML, 1: OBSTACLE_XML}
+STAGE_TERRAIN = {0: "flat", 1: "rough"}
 XML_PATH = STAGE_XML.get(CURRICULUM_STAGE, FLAT_XML)
 
-# --- Config ---
-
-
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+
 
 # --- Custom callback: save VecNormalize stats alongside model checkpoints ---
 class SaveVecNormalizeCallback(BaseCallback):
@@ -45,11 +58,16 @@ class SaveVecNormalizeCallback(BaseCallback):
             )
         return True
 
-# --- Env constructor (not registered — passed as a callable, not a string id) ---
+
+# --- Env constructor ---
 def make_go1_env(curriculum_stage=CURRICULUM_STAGE, cpg_mode=CPG_MODE):
     xml = STAGE_XML.get(curriculum_stage, FLAT_XML)
     terrain = TerrainConfig(mode=STAGE_TERRAIN.get(curriculum_stage, "flat"))
-    return go1_env(xml_file=xml, terrain_config=terrain, cpg_mode=cpg_mode)
+    env = go1_env(xml_file=xml, terrain_config=terrain, cpg_mode=cpg_mode)
+    # Flat-body trot: full kinematic penalties from step 0 — no curriculum ramp.
+    env.form_weight = 1.0
+    return env
+
 
 # --- Resume detection ---
 latest_checkpoint = None
@@ -59,10 +77,6 @@ if os.path.exists(CHECKPOINT_DIR):
         latest_checkpoint = max(checkpoints, key=lambda f: os.path.getctime(os.path.join(CHECKPOINT_DIR, f)))
         print(f"Loading latest checkpoint: {latest_checkpoint}")
 
-# Plan hygiene: old latest_vecnormalize.pkl was fit on 52-dim obs; the env is
-# now 56-dim. GO1_FRESH_VECNORM=1 forces a fresh VecNormalize fit (required
-# before any 56-dim SB3 training). Without it we still try the saved stats
-# but fall back to fresh on obs-dim mismatch instead of crashing mid-run.
 FRESH_VECNORM = os.environ.get("GO1_FRESH_VECNORM", "0") == "1"
 
 
@@ -75,7 +89,7 @@ if latest_checkpoint and not FRESH_VECNORM:
     try:
         env = VecNormalize.load(vecnorm_path, make_vec_env(make_go1_env, n_envs=4))
     except Exception as exc:
-        print(f"VecNormalize load failed ({exc}); starting fresh 56-dim stats.")
+        print(f"VecNormalize load failed ({exc}); starting fresh.")
         env = _fresh_vec_env()
         latest_checkpoint = None
     else:
@@ -83,24 +97,27 @@ if latest_checkpoint and not FRESH_VECNORM:
             os.path.join(CHECKPOINT_DIR, latest_checkpoint),
             env=env,
             tensorboard_log=LOG_DIR,
-            learning_rate=0.0001   # plain float, no closure, no custom_objects
+            learning_rate=0.0003
         )
-        # Guard: stale checkpoints trained on 52-dim obs cannot drive a 56-dim env.
         if int(model.observation_space.shape[0]) != 56:
-            print("Stale 52-dim SB3 checkpoint; starting fresh 56-dim policy.")
+            print("Stale checkpoint; starting fresh.")
             env = _fresh_vec_env()
             latest_checkpoint = None
 if not latest_checkpoint:
     env = _fresh_vec_env()
     model = PPO(
         "MlpPolicy", env,
-        learning_rate=0.0001,   # plain float
-        n_steps=512,
-        batch_size=64,
+        # --- Hyperparameters tuned for flat-body trot ---
+        # Larger rollouts (1024 steps) improve credit assignment for gait quality.
+        # Small entropy bonus (0.005) prevents premature gait collapse early in training.
+        # Slightly higher learning rate (0.0003) for faster initial convergence.
+        learning_rate=0.0003,
+        n_steps=1024,
+        batch_size=128,
         n_epochs=10,
         gamma=0.99,
         gae_lambda=0.95,
-        ent_coef=0.0,
+        ent_coef=0.005,
         vf_coef=0.5,
         max_grad_norm=0.5,
         verbose=1,
@@ -113,7 +130,6 @@ checkpoint_callback = CheckpointCallback(
     save_path=CHECKPOINT_DIR,
     name_prefix="rl_model",
 )
-
 
 model.learn(
     total_timesteps=2500000,
