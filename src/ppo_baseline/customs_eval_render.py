@@ -144,7 +144,7 @@ print(f"Eval: stage={STAGE} xml={os.path.basename(EVAL_XML)} cpg_mode={cpg_mode}
 
 render_mode_env = os.environ.get("GO1_RENDER_MODE", "human")
 is_human = (render_mode_env == "human")
-viewer_backend = os.environ.get("GO1_VIEWER", "opencv").lower()
+viewer_backend = os.environ.get("GO1_VIEWER", "mujoco").lower()
 speed = float(os.environ.get("GO1_SPEED", "1.0"))
 target_step_dt = 0.02 / max(0.1, speed)  # 50 Hz base physics step
 
