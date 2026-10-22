@@ -14,13 +14,23 @@ Usage:
     # Live viewer
     python src/eval_render.py
 """
+import os
+import sys
+
+# Avoid Wayland/GLFW/GNOME compositor and GLib-GIO antialiasing schema crashes
+local_share = os.path.expanduser("~/.local/share")
+if local_share not in os.environ.get("XDG_DATA_DIRS", ""):
+    os.environ["XDG_DATA_DIRS"] = f"{local_share}:{os.environ.get('XDG_DATA_DIRS', '')}"
+os.environ["QT_QPA_PLATFORMTHEME"] = "generic"
+os.environ["QT_STYLE_OVERRIDE"] = "Fusion"
+os.environ["GDK_BACKEND"] = "x11"
+os.environ.setdefault("GLFW_PLATFORM", "x11")
+
 import gymnasium as gym
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import VecNormalize, DummyVecEnv
 import imageio
 import numpy as np
-import os
-import sys
 from scipy.spatial.transform import Rotation as R
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

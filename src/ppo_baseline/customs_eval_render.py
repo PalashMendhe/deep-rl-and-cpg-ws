@@ -6,7 +6,13 @@ import torch
 import gymnasium as gym
 import time
 
-# Avoid Wayland/GLFW compositor crashes on GNOME/Ubuntu
+# Avoid Wayland/GLFW/GNOME compositor and GLib-GIO antialiasing schema crashes
+local_share = os.path.expanduser("~/.local/share")
+if local_share not in os.environ.get("XDG_DATA_DIRS", ""):
+    os.environ["XDG_DATA_DIRS"] = f"{local_share}:{os.environ.get('XDG_DATA_DIRS', '')}"
+os.environ["QT_QPA_PLATFORMTHEME"] = "generic"
+os.environ["QT_STYLE_OVERRIDE"] = "Fusion"
+os.environ["GDK_BACKEND"] = "x11"
 os.environ.setdefault("GLFW_PLATFORM", "x11")
 
 try:
