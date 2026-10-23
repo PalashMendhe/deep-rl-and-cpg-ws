@@ -6,20 +6,6 @@ import torch
 import gymnasium as gym
 import time
 
-# Avoid Wayland/GLFW/GNOME compositor and GLib-GIO antialiasing schema crashes
-local_share = os.path.expanduser("~/.local/share")
-if local_share not in os.environ.get("XDG_DATA_DIRS", ""):
-    os.environ["XDG_DATA_DIRS"] = f"{local_share}:{os.environ.get('XDG_DATA_DIRS', '')}"
-os.environ["QT_QPA_PLATFORMTHEME"] = "generic"
-os.environ["QT_STYLE_OVERRIDE"] = "Fusion"
-os.environ["GDK_BACKEND"] = "x11"
-os.environ.setdefault("GLFW_PLATFORM", "x11")
-
-try:
-    import glfw
-except Exception:
-    glfw = None
-
 try:
     import cv2  # CPG overlay bars; falls back to raw frames when missing
 except Exception:
@@ -49,11 +35,8 @@ def resolve_checkpoint_path():
     candidates = [
         os.path.join(REPO_ROOT, "ppo_checkpoint_latest.pth"),
         CHECKPOINT_PATH,  # same file base_ppo.py writes -> no path drift
-        os.path.join(REPO_ROOT, "flat_checkpoints", "ppo_checkpoint_3010560.pth"),
-        os.path.join(REPO_ROOT, "flat_checkpoints", "ppo_checkpoint_1515520.pth"),
         os.path.join(REPO_ROOT, "ppo_checkpoint_6000640.pth"),
         os.path.join(REPO_ROOT, "checkpoints", "ppo_checkpoint_latest.pth"),
-        os.path.join(REPO_ROOT, "checkpoints", "archive_20260928", "ppo_checkpoint_latest.pth"),
         os.path.join(REPO_ROOT, "checkpoints", "ppo_checkpoint_6000640.pth"),
         os.path.join(SCRIPT_DIR, "ppo_checkpoint_latest.pth"),
         os.path.join(os.getcwd(), "ppo_checkpoint_latest.pth"),
@@ -62,16 +45,6 @@ def resolve_checkpoint_path():
     for path in candidates:
         if path and os.path.exists(path):
             return path
-
-    # Fallback search for any ppo_checkpoint_*.pth in REPO_ROOT / flat_checkpoints
-    import glob
-    for search_dir in [os.path.join(REPO_ROOT, "flat_checkpoints"), os.path.join(REPO_ROOT, "checkpoints"), REPO_ROOT]:
-        found = glob.glob(os.path.join(search_dir, "**", "ppo_checkpoint_*.pth"), recursive=True)
-        if found:
-            # Sort by modification time descending
-            found.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-            return found[0]
-
     raise FileNotFoundError("Could not find a PPO checkpoint in the workspace.")
 
 
@@ -116,9 +89,8 @@ except RuntimeError as exc:
     print(f"Skipped keys: {skipped}")
 actor.eval()
 
-STAGE = os.environ.get("GO1_EVAL_STAGE", "flat")
+STAGE = os.environ.get("GO1_EVAL_STAGE", "hurdle")
 from src.terrain.config import TerrainConfig
-from scipy.spatial.transform import Rotation as R
 
 MENAGERIE_DIR = os.path.join(REPO_ROOT, "mujoco_menagerie", "unitree_go1")
 
@@ -138,13 +110,13 @@ else:
 if not os.path.exists(EVAL_XML):
     EVAL_XML = os.path.join(MENAGERIE_DIR, "scene.xml")
 
-cpg_mode = checkpoint.get("cpg_mode", "fixed_residual") if isinstance(checkpoint, dict) else "fixed_residual"
+cpg_mode = checkpoint.get("cpg_mode", "off") if isinstance(checkpoint, dict) else "off"
 print(f"Eval: stage={STAGE} xml={os.path.basename(EVAL_XML)} cpg_mode={cpg_mode} "
       f"actor=({state_dim},{residual_dim}+{mod_dim})")
 
-render_mode_env = os.environ.get("GO1_RENDER_MODE", "human")
+render_mode_env = os.environ.get("GO1_RENDER_MODE", "rgb_array")
 is_human = (render_mode_env == "human")
-viewer_backend = os.environ.get("GO1_VIEWER", "mujoco").lower()
+viewer_backend = os.environ.get("GO1_VIEWER", "opencv").lower()
 speed = float(os.environ.get("GO1_SPEED", "1.0"))
 target_step_dt = 0.02 / max(0.1, speed)  # 50 Hz base physics step
 
@@ -153,7 +125,6 @@ internal_render_mode = "rgb_array" if (is_human and viewer_backend == "opencv") 
 
 env = gym.make("Go1Env-v0", xml_file=EVAL_XML, terrain_config=terrain, cpg_mode=cpg_mode,
                residual_scale=0.10, render_mode=internal_render_mode)
-env.unwrapped.form_weight = 1.0
 state, _ = env.reset()
 assert state.shape == (state_dim,), f"obs {state.shape} != actor ({state_dim},)"
 
@@ -173,23 +144,35 @@ try:
 except Exception:
     pass
 
-viewers_to_tune = []
-if hasattr(mujoco_env.mujoco_renderer, "_viewers"):
-    viewers_to_tune.extend(mujoco_env.mujoco_renderer._viewers.values())
-if hasattr(mujoco_env.mujoco_renderer, "viewer") and mujoco_env.mujoco_renderer.viewer is not None:
-    if mujoco_env.mujoco_renderer.viewer not in viewers_to_tune:
-        viewers_to_tune.append(mujoco_env.mujoco_renderer.viewer)
+viewer = getattr(mujoco_env.mujoco_renderer, "viewer", None)
+if viewer is None:
+    # wait a short moment for the renderer to initialize
+    for _ in range(10):
+        time.sleep(0.05)
+        viewer = getattr(mujoco_env.mujoco_renderer, "viewer", None)
+        if viewer is not None:
+            break
+mujoco_env = env.unwrapped
 
-if viewers_to_tune:
+# Force the renderer to initialize its offscreen viewer
+mujoco_env.render()
+
+# Access the offscreen viewer directly
+viewer = mujoco_env.mujoco_renderer.viewer
+
+if viewer is not None:
     try:
+        # Get the body ID for 'trunk' (MuJoCo 3.x style via model)
         body_id = mujoco_env.model.body('trunk').id
-        for v in viewers_to_tune:
-            if hasattr(v, "cam"):
-                v.cam.type = 1  # mjCAMERA_TRACKING
-                v.cam.trackbodyid = body_id
-                v.cam.distance = 2.0  
-                v.cam.elevation = -15.0
-                v.cam.azimuth = 90
+        
+        # Configure smooth tracking
+        viewer.cam.type = 1  # mjCAMERA_TRACKING
+        viewer.cam.trackbodyid = body_id
+        
+        # 2.5 to 3.5 meters is optimal zoom for a Go1. 12.0 is way too far.
+        viewer.cam.distance = 2.0  
+        viewer.cam.elevation = -15.0
+        viewer.cam.azimuth = 90  # Gives an angled 3/4 view
     except Exception as exc:
         print(f"Couldn't set camera parameters: {exc}")
 else:
@@ -200,16 +183,11 @@ jump_hits = 0
 jump_successes = 0
 jump_landings = 0.0
 clearances = []
-trunk_heights = []
-pitch_angles = []
-height_penalties = []
-trot_flags = []
-x_velocities = []
 LEG_NAMES = ("FR", "FL", "RR", "RL")
 
 
-def _overlay_cpg(frame, info, pitch=0.0):
-    """Plan Step-9 CPG overlay: per-leg swing bars + phase/clearance/pitch text.
+def _overlay_cpg(frame, info):
+    """Plan Step-9 CPG overlay: per-leg swing bars + phase/clearance text.
 
     Skipped (raw frame) when cv2 is unavailable so GIF saving never breaks.
     """
@@ -219,7 +197,9 @@ def _overlay_cpg(frame, info, pitch=0.0):
         h, w = frame.shape[0], frame.shape[1]
         img = frame.copy()
         phase = float(info.get("cpg_phase", 0.0))
-        height = float(info.get("current_height", 0.0))
+        boost = float(info.get("jump_boost", 0.0))
+        clear = float(info.get("clearance_m", 0.0))
+        dist = float(info.get("dist_to_hurdle", 0.0))
         bar_w, bar_h, x0, y0 = 130, 12, 12, h - 4 * 26 - 44
         for i, name in enumerate(LEG_NAMES):
             s = float(np.sin(phase + i * np.pi))  # trot: diagonal pairs oppose
@@ -229,7 +209,7 @@ def _overlay_cpg(frame, info, pitch=0.0):
             cv2.rectangle(img, (x0, y), (x0 + fill, y + bar_h), (90, 200, 90), -1)
             cv2.putText(img, name, (x0 + bar_w + 8, y + 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-        txt = f"phase {phase % 6.283:.2f}  h {height:.3f}m  pitch {pitch:.3f}rad"
+        txt = f"phase {phase % 6.283:.2f}  boost {boost:.2f}  dist {dist:.2f}m  clear {clear:.2f}m"
         cv2.putText(img, txt, (12, y0 - 12),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
         return img
@@ -244,60 +224,32 @@ for step_idx in range(2000):
     with torch.no_grad():
         action, _, _ = actor(state_tensor)
     state, reward, terminated, truncated, info = env.step(action.numpy().flatten())
+    if isinstance(info, dict) and "dist_to_hurdle" in info:
+        clearances.append(float(info.get("clearance_m", 0.0)))
 
-    current_pitch = 0.0
-    if hasattr(mujoco_env, "data") and hasattr(mujoco_env.data, "qpos"):
-        q = mujoco_env.data.qpos[3:7]
-        current_pitch = float(R.from_quat([q[1], q[2], q[3], q[0]]).as_euler("xyz")[1])
+    try:
+        frame = env.render()
+        if frame is not None:
+            raw_frame = frame if isinstance(frame, np.ndarray) else np.asarray(frame)
+            annotated = _overlay_cpg(raw_frame.astype(np.uint8), info)
+            frames.append(annotated)
 
-    if isinstance(info, dict):
-        if "clearance_m" in info:
-            clearances.append(float(info.get("clearance_m", 0.0)))
-        trunk_heights.append(float(info.get("current_height", 0.0)))
-        height_penalties.append(float(info.get("raw_body_height_penalty", 0.0)))
-        trot_flags.append(float(info.get("raw_trot_flag", 0.0)))
-        x_velocities.append(float(info.get("local_x_velocity", 0.0)))
-        pitch_angles.append(current_pitch)
-
-    if is_human and viewer_backend == "mujoco":
-        try:
-            env.render()
-            h_viewer = (
-                mujoco_env.mujoco_renderer._viewers.get("human")
-                if hasattr(mujoco_env.mujoco_renderer, "_viewers")
-                else None
-            )
-            if h_viewer is not None and glfw is not None and hasattr(h_viewer, "window"):
-                if glfw.window_should_close(h_viewer.window):
-                    print("\nUser closed simulation window. Stopping simulation.")
+            if is_human and viewer_backend == "opencv" and cv2 is not None:
+                bgr = cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR)
+                cv2.imshow(f"Go1 PPO Simulation ({STAGE.upper()})", bgr)
+                elapsed = time.time() - step_t0
+                wait_ms = max(1, int((target_step_dt - elapsed) * 1000))
+                key = cv2.waitKey(wait_ms) & 0xFF
+                if key in (27, ord('q')):
+                    print("\nUser pressed exit key. Stopping simulation.")
                     user_exited = True
                     break
-        except Exception as exc:
-            print(f"Render error: {exc}")
-
-        elapsed = time.time() - step_t0
-        if target_step_dt > elapsed:
-            time.sleep(target_step_dt - elapsed)
-    else:
-        try:
-            frame = env.render()
-            if frame is not None:
-                raw_frame = frame if isinstance(frame, np.ndarray) else np.asarray(frame)
-                annotated = _overlay_cpg(raw_frame.astype(np.uint8), info, pitch=current_pitch)
-                frames.append(annotated)
-
-                if is_human and viewer_backend == "opencv" and cv2 is not None:
-                    bgr = cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR)
-                    cv2.imshow(f"Go1 PPO Simulation ({STAGE.upper()})", bgr)
-                    elapsed = time.time() - step_t0
-                    wait_ms = max(1, int((target_step_dt - elapsed) * 1000))
-                    key = cv2.waitKey(wait_ms) & 0xFF
-                    if key in (27, ord('q')):
-                        print("\nUser pressed exit key. Stopping simulation.")
-                        user_exited = True
-                        break
-        except Exception as exc:
-            print(f"Render skipped: {exc}")
+            elif is_human and viewer_backend == "mujoco":
+                elapsed = time.time() - step_t0
+                if target_step_dt > elapsed:
+                    time.sleep(target_step_dt - elapsed)
+    except Exception as exc:
+        print(f"Render skipped: {exc}")
 
     if user_exited:
         break
@@ -314,20 +266,11 @@ for step_idx in range(2000):
         if episodes >= 20:
             break
 
-def _fmt_stat(arr, unit=""):
-    if not arr:
-        return "n/a"
-    return f"mean={np.mean(arr):.4f}{unit} std={np.std(arr):.4f}{unit} max={np.max(np.abs(arr)):.4f}{unit}"
-
-print(f"\n{'─'*60}")
-print(f"  Flat-Body Trot Custom PPO Eval  |  {episodes} episodes")
-print(f"{'─'*60}")
-print(f"  Trunk height  : {_fmt_stat(trunk_heights, 'm')}  [target: 0.30 - 0.35 m]")
-print(f"  Pitch angle   : {_fmt_stat(pitch_angles, 'rad')}  [target: ~0]")
-print(f"  Height penalty: {_fmt_stat(height_penalties)}")
-print(f"  Trot validity : valid_frac={1.0 - np.mean(trot_flags):.3f}  [target: 1.0]" if trot_flags else "  Trot validity : n/a")
-print(f"  X velocity    : {_fmt_stat(x_velocities, 'm/s')}  [target: 0.6 m/s]")
-print(f"{'─'*60}")
+print(f"\nEpisodes: {episodes} | jump_eps: {jump_episodes} "
+      f"hit_rate={jump_hits/max(1,jump_episodes):.2f} "
+      f"success_rate={jump_successes/max(1,jump_episodes):.2f} "
+      f"mean_clearance={float(np.mean(clearances)) if clearances else 0.0:.3f}m "
+      f"mean_landing_bonus={jump_landings/max(1,jump_episodes):.3f}")
 
 if is_human and cv2 is not None:
     try:
