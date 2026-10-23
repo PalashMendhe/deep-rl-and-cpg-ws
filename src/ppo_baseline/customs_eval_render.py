@@ -203,7 +203,7 @@ if viewers_to_tune:
         body_id = mujoco_env.model.body("trunk").id
         for v in viewers_to_tune:
             if hasattr(v, "cam"):
-                v.cam.type = 2  # mjCAMERA_TRACKING
+                v.cam.type = 1  # 0=FREE, 1=TRACKING, 2=FIXED
                 v.cam.trackbodyid = body_id
                 v.cam.distance = 2.5
                 v.cam.elevation = -18.0

@@ -92,7 +92,7 @@ eval_env.render()
 viewer = getattr(mujoco_env.mujoco_renderer, "viewer", None)
 if viewer is not None and hasattr(viewer, "cam"):
     viewer.cam.trackbodyid = mujoco_env.model.body("trunk").id
-    viewer.cam.type = 2         # mjCAMERA_TRACKING
+    viewer.cam.type = 1         # 0=FREE, 1=TRACKING, 2=FIXED
     viewer.cam.distance = 2.5   # closer — flat trot is compact
     viewer.cam.elevation = -18  # slight downward angle to see the flat body
     viewer.cam.azimuth = 90     # side-on view shows body level best
