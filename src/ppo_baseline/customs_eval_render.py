@@ -322,7 +322,7 @@ def _fmt_stat(arr, unit=""):
 print(f"\n{'─'*60}")
 print(f"  Flat-Body Trot Custom PPO Eval  |  {episodes} episodes")
 print(f"{'─'*60}")
-print(f"  Trunk height  : {_fmt_stat(trunk_heights, 'm')}  [target: 0.30 m]")
+print(f"  Trunk height  : {_fmt_stat(trunk_heights, 'm')}  [target: 0.30 - 0.35 m]")
 print(f"  Pitch angle   : {_fmt_stat(pitch_angles, 'rad')}  [target: ~0]")
 print(f"  Height penalty: {_fmt_stat(height_penalties)}")
 print(f"  Trot validity : valid_frac={1.0 - np.mean(trot_flags):.3f}  [target: 1.0]" if trot_flags else "  Trot validity : n/a")

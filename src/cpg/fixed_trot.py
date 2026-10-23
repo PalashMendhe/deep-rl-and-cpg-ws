@@ -10,7 +10,7 @@ Key design decisions vs. the old dog-like gait:
   - thigh_amp reduced (0.25 → 0.15): smaller thigh swing → less body pitch.
   - calf_amp reduced (-0.35 → -0.20): lighter calf retraction → smoother
     foot clearance without pulling the body up.
-  - Hip joints get a small abduction drive (hip_amp=0.08 rad): lateral hip
+  - Hip joints get a small abduction drive (hip_amp=0.05 rad): lateral hip
     oscillation is the biological hallmark of a real trot; keeps the foot
     path wide enough for clearance without tilting the trunk.
 
@@ -52,11 +52,11 @@ class FixedTrotCPG:
         freq_hz:   Trot frequency in Hz (default 2.0).
         thigh_amp: Thigh sine amplitude in radians (default 0.15).
         calf_amp:  Calf retraction amplitude in radians (default -0.20).
-        hip_amp:   Hip lateral abduction amplitude in radians (default 0.08).
+        hip_amp:   Hip lateral abduction amplitude in radians (default 0.05).
         stance:    12-dim home joint angles (defaults to FLAT_STANCE).
     """
-    def __init__(self, freq_hz=2.0, thigh_amp=0.15, calf_amp=-0.20,
-                 hip_amp=0.08, stance=None):
+    def __init__(self, freq_hz=3.0, thigh_amp=0.15, calf_amp=-0.20,
+                 hip_amp=0.05, stance=None):
         self.params = CPGParams(
             frequency_hz=float(freq_hz),
             thigh_amp=float(thigh_amp),
@@ -87,6 +87,7 @@ class FixedTrotCPG:
         p = self.params
         phase_1 = phase          # FL, RR
         phase_2 = phase + np.pi  # FR, RL
+        phases = np.array([phase_2, phase_1, phase_1, phase_2])  # FR, FL, RR, RL
 
         # --- Thigh: sine drive ---
         thigh_1 = p.thigh_amp * np.sin(phase_1)

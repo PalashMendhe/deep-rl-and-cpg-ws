@@ -159,7 +159,7 @@ def _fmt(arr, unit=""):
 print(f"\n{'─'*60}")
 print(f"  Flat-Body Trot Eval  |  {episodes} episodes")
 print(f"{'─'*60}")
-print(f"  Trunk height  : {_fmt(trunk_heights, 'm')}  [target: 0.30 m]")
+print(f"  Trunk height  : {_fmt(trunk_heights, 'm')}  [target: 0.30 - 0.35 m]")
 print(f"  Pitch angle   : {_fmt(pitch_angles, 'rad')}  [target: ~0]")
 print(f"  Height penalty: {_fmt(height_penalties)}")
 print(f"  Trot validity : valid_frac={1.0 - np.mean(trot_flags):.3f}  [target: 1.0]")

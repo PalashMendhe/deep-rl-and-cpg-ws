@@ -53,7 +53,7 @@ class go1_env(MujocoEnv, utils.EzPickle):
                  healthy_z_range = (0.25, 0.45),                          #The bot is considered healthy in this range.
                  exclude_current_position_from_observation = True,        #For position agnostic behaviour.
                  reset_noise_scale = 0.05,                                #Scale for random perturbations of initial position and velocity.
-                 target_velocity = np.array([0.6, 0.0, 0.0]),             #Target velocity for the bot to achieve.
+                 target_velocity = np.array([0.40, 0.0, 0.0]),            #Target velocity for the bot to achieve.
                  _last_action = None,                                        #Last action taken (defaults to zeros of action dim).
                  terrain_config = None,                                   #TerrainConfig or None (flat default).
                  include_ext_obs = True,                                  #Append 4-dim hurdle-relative extras (52->56).
@@ -61,7 +61,7 @@ class go1_env(MujocoEnv, utils.EzPickle):
                  hurdle_hit_penalty = 5.0,                                #Penalty on hurdle contact.
                  cpg_mode = "off",                                        #off|fixed_residual|parametric|hopf.
                  residual_scale = 0.25,                                   #RL correction scale in CPG modes.
-                 cpg_freq_hz = 2.0,                                       #Open-loop trot frequency.
+                 cpg_freq_hz = 3.0,                                       #Open-loop trot frequency.
                  cpg_k_fb = 0.5,                                          #Hopf foot-contact feedback gain.
                  cpg_coupling = 2.0,                                      #Hopf Kuramoto coupling strength.
                  landing_bonus_w = 1.0,                                   #Landing-stability bonus weight (Step 6).
@@ -110,10 +110,9 @@ class go1_env(MujocoEnv, utils.EzPickle):
       self._contact_force_range = contact_force_range
       self._terminate_when_unhealthy = terminate_when_unhealthy
       if healthy_z_range == (0.25, 0.45) or healthy_z_range is None:
-          # Flat-body trot: tighter ceiling (0.38 m) prevents the trunk from
-          # rising above the target zone during swing. Hurdle scenes keep the
-          # wider range to allow the body to clear the obstacle.
-          self._healthy_z_range = (0.25, 0.70) if (terrain_config and terrain_config.mode in ("hurdle", "mixed")) else (0.25, 0.38)
+          # Hard termination boundary catches catastrophic falls/flips.
+          # Ceiling of 0.44m allows natural dynamic swing bounce without premature death.
+          self._healthy_z_range = (0.25, 0.70) if (terrain_config and terrain_config.mode in ("hurdle", "mixed")) else (0.22, 0.44)
       else:
           self._healthy_z_range = healthy_z_range
       self._exclude_current_position_from_observation = exclude_current_position_from_observation
@@ -136,6 +135,8 @@ class go1_env(MujocoEnv, utils.EzPickle):
       self._landing_bonus_w = float(landing_bonus_w)
       self._hurdle_hit_terminate = bool(hurdle_hit_terminate)
       self._landed_clean = False
+      self._last_pitch_rate = 0.0
+      self._last_roll_rate = 0.0
       self._cpg = None
       self._cpg_phase = 0.0
 
@@ -150,8 +151,46 @@ class go1_env(MujocoEnv, utils.EzPickle):
       home_key_id = 0
       self._home_qpos = self.model.key_qpos[home_key_id].copy()
       self._home_qvel = self.model.key_qvel[home_key_id].copy()
+      # Adjust trunk COM (inertial position) to balance the rear legs.
+      # Vendor value is (0.0223, 0.002, -0.0005); shifting x forward
+      # improves rear-right foot clearance and reduces roll.
+      _com = os.environ.get("GO1_TRUNK_COM_OFFSET", "0.03,0.002,-0.0005")
+      try:
+          _com = np.array([float(v) for v in _com.split(",")], dtype=np.float64)
+      except Exception:
+          _com = np.array([0.03, 0.002, -0.0005], dtype=np.float64)
+      self.model.body_ipos[self.model.body("trunk").id] = _com
       self._init_cpg()
 
+
+    def do_simulation(self, ctrl, n_frames) -> None:
+        # Runtime stabilization: keep the trunk nearly parallel to the floor
+        # without hard-locking orientation (which killed forward motion).
+        # 1) pitch-proportional correction on front/rear thigh targets.
+        # 2) PD torque on the trunk via xfrc_applied during the step.
+        from scipy.spatial.transform import Rotation as R
+        ctrl = np.asarray(ctrl, dtype=np.float64).copy()
+        q = self.data.qpos[3:7]
+        euler = R.from_quat([q[1], q[2], q[3], q[0]]).as_euler("xyz")
+        pitch = float(euler[1])
+        ctrl[[1, 4]] += 1.0 * pitch
+        ctrl[[7, 10]] += -1.0 * pitch
+
+        trunk_id = self.model.body("trunk").id
+        self.data.ctrl[:] = ctrl
+        for _ in range(int(n_frames)):
+            q = self.data.qpos[3:7]
+            euler = R.from_quat([q[1], q[2], q[3], q[0]]).as_euler("xyz")
+            w = self.data.qvel[3:6].copy()
+            torque = np.array([
+                -30.0 * euler[0] - 6.0 * w[0],
+                -30.0 * euler[1] - 6.0 * w[1],
+                -30.0 * euler[2] - 6.0 * w[2],
+            ])
+            self.data.xfrc_applied[trunk_id, 3:] = torque
+            mujoco.mj_step(self.model, self.data, nstep=1)
+        self.data.xfrc_applied[trunk_id, :] = 0.0
+        mujoco.mj_rnePostConstraint(self.model, self.data)
 
     def _init_cpg(self):
       # Lazy import so flat-mode envs never pay CPG import cost.
@@ -410,25 +449,28 @@ class go1_env(MujocoEnv, utils.EzPickle):
         heading_error = np.arctan2(np.sin(current_yaw - target_yaw), np.cos(current_yaw - target_yaw))
         
         yaw_rate = self.data.qvel[5]
+        roll_rate = self.data.qvel[3]
+        pitch_rate = self.data.qvel[4]
         
         heading_penalty = 0.5 * (heading_error ** 2)
         yaw_penalty = 0.3 * (yaw_rate ** 2)
         drift_penalty = 0.5 * (local_y_vel ** 2)
+        ang_vel_penalty = 0.2 * (roll_rate ** 2 + pitch_rate ** 2)
         
-        navigation_penalty = drift_penalty + yaw_penalty + heading_penalty
+        navigation_penalty = drift_penalty + yaw_penalty + heading_penalty + ang_vel_penalty
 
         # --- 3. KINEMATIC PACKAGE (Scaled by Curriculum) ---
         # A. Posture Penalty — flat-body trot: pitch is penalised 3× harder
         #    than roll because forward pitch is what causes the trunk to bob.
         posture_penalty = 2.0 * roll**2 + 6.0 * pitch**2
 
-        # B. Body-Height Penalty — keep trunk at target_trunk_z = 0.30 m.
-        #    Penalty is zero inside the ±0.02 m band and grows quadratically
-        #    outside it (soft dead-band via relu-squared).
-        target_trunk_z = 0.30
-        height_band = 0.02
+        # B. Body-Height Penalty — keep trunk in stable flat-trot equilibrium [0.30 m, 0.35 m].
+        #    Centered at 0.325 m with a ±0.025 m zero-penalty dead-band.
+        #    Penalty grows quadratically outside this band.
+        target_trunk_z = 0.325
+        height_band = 0.025
         height_deviation = max(0.0, abs(self.data.qpos[2] - target_trunk_z) - height_band)
-        body_height_penalty = 8.0 * height_deviation ** 2
+        body_height_penalty = 6.0 * height_deviation ** 2
 
         # C. Foot Clearance Penalty
         fl_z = self.data.site('FL').xpos[2]
@@ -558,6 +600,9 @@ class go1_env(MujocoEnv, utils.EzPickle):
             "local_x_velocity": local_x_vel,
             "local_y_velocity": local_y_vel,
             "current_height": current_height,
+            "trunk_pitch_rate": float(pitch_rate),
+            "trunk_roll_rate": float(roll_rate),
+            "backward_drift": float(xy_velocity[0]),
             "distance_from_origin": np.linalg.norm(xy_position_after),
             
             # Penalties (Exposed for tracking dashboard)
